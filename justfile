@@ -1,10 +1,14 @@
 set default-list := true
 
-lint-all: lint-python lint-all-js    
+lint-all: lint-python lint-branding lint-all-js    
 
 [group('lint python')]
 lint-python:
     @ruff check ./
+
+[group('lint python')]
+lint-branding:
+    @python3 slim/lint_branding.py
 
 [group('lint python')]
 lint-python-fix:

@@ -1,4 +1,4 @@
-# hermes-slim testing plan
+# talos testing plan
 
 ## Layers
 
@@ -15,7 +15,7 @@ Smoke steps (layer 4):
    pydantic-core, jiter, Pillow, pillow-heif, psutil, aiohttp, httptools, watchfiles, ...).
 2. `hermes --version` runs.
 3. Setup rejects bad input non-interactively (blank first name → exit 2).
-4. `hermes-slim-setup --non-interactive` with untrimmed names (`"  Ada "`, `" Love lace"`) →
+4. `talos-setup --non-interactive` with untrimmed names (`"  Ada "`, `" Love lace"`) →
    stored as `Ada` / `Lovelace`.
 5. The gateway starts and `GET 127.0.0.1:8642/health` returns `{"status":"ok"}`.
 6. `config.yaml` has `provider: openrouter`, `deepseek/deepseek-v4.1-flash` and the OpenRouter

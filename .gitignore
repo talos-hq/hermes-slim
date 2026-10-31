@@ -333,5 +333,5 @@ native/fts5_cjk/*.so
 
 apps/desktop/.dist-build*
 
-# hermes-slim local bundles (bosn.toml)
+# talos local bundles (bosn.toml)
 /.bosn-dist/
