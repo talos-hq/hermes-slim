@@ -1,11 +1,11 @@
-# talos local loop, in the same alpine:3.22 the linux-x64-musl CI job uses:
+# hermes-slim local loop, in the same alpine:3.22 the linux-x64-musl CI job uses:
 #   bosn run --task bundle          build the glibc linux-x64 bundle (bundle-musl: linux-x64-musl)
 #   bosn run --task install-debian  run install.sh on a clean glibc box (no Python, no git)
 #   bosn run --task install-alpine  the same on a clean musl box
 # Bundles land in .bosn-dist/ (gitignored), which every stack mounts at /dist.
 [stack.alpine]
 dockerfile = "slim/bosn/alpine.Dockerfile"
-family = "talos-alpine"
+family = "hermes-slim-alpine"
 default = true
 workdir = "/repo"
 
@@ -18,7 +18,7 @@ work = { scope = "stack", destination = "/work" }
 
 [stack.glibc]
 dockerfile = "slim/bosn/glibc.Dockerfile"
-family = "talos-glibc"
+family = "hermes-slim-glibc"
 workdir = "/repo"
 
 [stack.glibc.mounts]
@@ -30,7 +30,7 @@ work = { scope = "stack", destination = "/work" }
 
 [stack.debian]
 dockerfile = "slim/bosn/debian.Dockerfile"
-family = "talos-debian"
+family = "hermes-slim-debian"
 workdir = "/repo"
 
 [stack.debian.mounts]
@@ -41,7 +41,7 @@ dist = { source = ".bosn-dist", destination = "/dist" }
 
 [stack.ubuntu]
 dockerfile = "slim/bosn/ubuntu.Dockerfile"
-family = "talos-ubuntu"
+family = "hermes-slim-ubuntu"
 workdir = "/repo"
 
 [stack.ubuntu.mounts]
@@ -50,7 +50,7 @@ dist = { source = ".bosn-dist", destination = "/dist" }
 
 [stack.alpine-client]
 dockerfile = "slim/bosn/alpine-client.Dockerfile"
-family = "talos-alpine-client"
+family = "hermes-slim-alpine-client"
 workdir = "/repo"
 
 [stack.alpine-client.mounts]

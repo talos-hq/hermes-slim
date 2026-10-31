@@ -25,7 +25,7 @@ concurrency:
 jobs:
   attach:
     name: Desktop attach to a running local gateway (Windows)
-    # talos: GitHub-hosted (the fork has no Blacksmith runners).
+    # hermes-slim: GitHub-hosted (the fork has no Blacksmith runners).
     runs-on: windows-latest
     timeout-minutes: 60
     steps:

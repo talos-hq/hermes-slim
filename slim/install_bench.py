@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Time each phase of a client install of a built bundle.
 
-    python slim/install_bench.py dist/talos-<rev>-<target>.tar.gz
+    python slim/install_bench.py dist/hermes-slim-<rev>-<target>.tar.gz
 
 Phases: unpack, first `hermes --version` (cold: nothing compiled yet), second
 one (warm), and non-interactive setup until the gateway answers /health.
@@ -39,11 +39,11 @@ def main() -> int:
 
     print(f"archive {args.archive.name}: {args.archive.stat().st_size / 2**20:.0f} MiB")
 
-    root = Path(tempfile.mkdtemp(prefix="talos-bench-"))
-    bundle = root / "talos"
+    root = Path(tempfile.mkdtemp(prefix="hermes-slim-bench-"))
+    bundle = root / "hermes-slim"
     windows = os.name == "nt"
     hermes = bundle / "bin" / ("hermes.cmd" if windows else "hermes")
-    setup = bundle / "bin" / ("talos-setup.cmd" if windows else "talos-setup")
+    setup = bundle / "bin" / ("hermes-slim-setup.cmd" if windows else "hermes-slim-setup")
     home = root / "home"
     env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "PYTHONPATH", "PYTHONHOME")}
     env.update(HERMES_HOME=str(home), HERMES_NONINTERACTIVE="1")
