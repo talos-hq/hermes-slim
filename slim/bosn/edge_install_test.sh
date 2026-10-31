@@ -22,7 +22,7 @@ else
   tail -2 "$HOME/bad.log"
 fi
 "$HOME/.local/bin/hermes" --version >/dev/null 2>&1 && echo ok || { echo "FAIL: corrupt archive broke the install"; fail=1; }
-[ ! -e "$dir/hermes-slim.new" ] || { echo "FAIL: partial unpack left behind"; fail=1; }
+[ ! -e "$dir/talos.new" ] || { echo "FAIL: partial unpack left behind"; fail=1; }
 
 echo "== failed upgrade setup leaves a working install"
 # A port taken by a foreign server makes the upgrade's gateway step fail.

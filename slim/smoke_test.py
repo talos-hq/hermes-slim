@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end smoke test of a built bundle, the way a client would use it.
 
-    python slim/smoke_test.py dist/hermes-slim-<rev>-<target>.tar.gz
+    python slim/smoke_test.py dist/talos-<rev>-<target>.tar.gz
 
-Unpacks into a fresh directory, runs hermes-slim-setup non-interactively
+Unpacks into a fresh directory, runs talos-setup non-interactively
 against a throwaway HERMES_HOME, and checks that:
   1. the bundled interpreter imports every compiled dependency,
   2. config.yaml/.env hold the OpenRouter autofill,
@@ -40,16 +40,16 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8642)
     args = ap.parse_args()
 
-    root = Path(tempfile.mkdtemp(prefix="hermes-slim-smoke-"))
+    root = Path(tempfile.mkdtemp(prefix="talos-smoke-"))
     if args.archive.suffix == ".zip":
         zipfile.ZipFile(args.archive).extractall(root)
     else:
         # .tar.zst: GNU tar (with zstd on PATH) and bsdtar both pick the codec from the suffix.
         subprocess.run(["tar", "-xf", args.archive, "-C", root], check=True)
-    bundle = root / "hermes-slim"
+    bundle = root / "talos"
     windows = os.name == "nt"
     py = bundle / "python" / ("python.exe" if windows else "bin/python3")
-    setup = bundle / "bin" / ("hermes-slim-setup.cmd" if windows else "hermes-slim-setup")
+    setup = bundle / "bin" / ("talos-setup.cmd" if windows else "talos-setup")
     hermes = bundle / "bin" / ("hermes.cmd" if windows else "hermes")
     home = root / "home"
     real_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -88,13 +88,13 @@ def main() -> int:
     for needle in ("provider: openrouter", "deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1"):
         assert needle in cfg, f"{needle!r} missing from config.yaml"
     dotenv = (home / ".env").read_text()
-    assert "OPENROUTER_API_KEY=" in dotenv and "HERMES_SLIM=1" in dotenv, dotenv
+    assert "OPENROUTER_API_KEY=" in dotenv and "TALOS=1" in dotenv, dotenv
 
     step("Nous hidden from provider pickers")
     listed = subprocess.run(
         [py, "-c", "from hermes_cli.models_catalog_static import listed_canonical_providers as l; "
                    "print(','.join(getattr(p, 'slug', None) or getattr(p, 'name', None) or str(p) for p in l()))"],
-        env=dict(env, PYTHONPATH=str(bundle / "app"), HERMES_SLIM="1"), capture_output=True, text=True, check=True).stdout
+        env=dict(env, PYTHONPATH=str(bundle / "app"), TALOS="1"), capture_output=True, text=True, check=True).stdout
     print(listed)
     assert "openrouter" in listed and "nous" not in listed.split(","), listed
 

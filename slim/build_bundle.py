@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained hermes-slim bundle for one target.
+"""Build a self-contained talos bundle for one target.
 
     python slim/build_bundle.py --target darwin-x64 [--out dist] [--wheels DIR]
 
@@ -142,12 +142,12 @@ def write_launchers(bundle: Path, windows: bool) -> None:
     bindir = bundle / "bin"
     bindir.mkdir(exist_ok=True)
     if windows:
-        for name, script in (("hermes", "app\\hermes"), ("hermes-slim-setup", "app\\slim\\setup.py")):
+        for name, script in (("hermes", "app\\hermes"), ("talos-setup", "app\\slim\\setup.py")):
             (bindir / f"{name}.cmd").write_text(
                 "@echo off\r\n"
                 "set \"HS_ROOT=%~dp0..\"\r\n"
                 "set \"PYTHONPATH=%HS_ROOT%\\app\"\r\n"
-                "set \"HERMES_SLIM=1\"\r\n"
+                "set \"TALOS=1\"\r\n"
                 # `hermes update` moves a bundle, not a git checkout: slim/update.py.
                 + ("if /i \"%~1\"==\"update\" (\"%HS_ROOT%\\python\\python.exe\" \"%HS_ROOT%\\app\\slim\\update.py\" %* & exit /b)\r\n"
                    if name == "hermes" else "")
@@ -155,7 +155,7 @@ def write_launchers(bundle: Path, windows: bool) -> None:
                 newline="",
             )
     else:
-        for name, script in (("hermes", "app/hermes"), ("hermes-slim-setup", "app/slim/setup.py")):
+        for name, script in (("hermes", "app/hermes"), ("talos-setup", "app/slim/setup.py")):
             p = bindir / name
             p.write_text(
                 "#!/bin/sh\n"
@@ -164,7 +164,7 @@ def write_launchers(bundle: Path, windows: bool) -> None:
                 'while [ -L "$self" ]; do l="$(readlink "$self")"; case "$l" in /*) self="$l" ;; *) self="$(dirname "$self")/$l" ;; esac; done\n'
                 'HS_ROOT="$(cd "$(dirname "$self")/.." && pwd)"\n'
                 'export PYTHONPATH="$HS_ROOT/app"\n'
-                "export HERMES_SLIM=1\n"
+                "export TALOS=1\n"
                 # `hermes update` moves a bundle, not a git checkout: slim/update.py.
                 + ('[ "${1:-}" = update ] && exec "$HS_ROOT/python/bin/python3" "$HS_ROOT/app/slim/update.py" "$@"\n'
                    if name == "hermes" else "")
@@ -219,10 +219,10 @@ def precompile(bundle: Path, python: Path, windows: bool, work: Path) -> None:
     home = work / "warm-home"
     shutil.rmtree(home, ignore_errors=True)
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONDONTWRITEBYTECODE")}
-    env.update(HERMES_HOME=str(home), HERMES_NONINTERACTIVE="1", PYTHONPATH=str(bundle / "app"), HERMES_SLIM="1")
+    env.update(HERMES_HOME=str(home), HERMES_NONINTERACTIVE="1", PYTHONPATH=str(bundle / "app"), TALOS="1")
     bindir = bundle / "bin"
     hermes = bindir / ("hermes.cmd" if windows else "hermes")
-    setup = bindir / ("hermes-slim-setup.cmd" if windows else "hermes-slim-setup")
+    setup = bindir / ("talos-setup.cmd" if windows else "talos-setup")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -250,9 +250,9 @@ def precompile(bundle: Path, python: Path, windows: bool, work: Path) -> None:
 
 
 def stage(target: str, wheels: Path | None, work: Path) -> Path:
-    """Assemble work/hermes-slim; package() turns it into the archive."""
+    """Assemble work/talos; package() turns it into the archive."""
     windows = target.startswith("win32")
-    bundle = work / "hermes-slim"
+    bundle = work / "talos"
     if bundle.exists():
         shutil.rmtree(bundle)
     bundle.mkdir(parents=True)
@@ -341,7 +341,7 @@ def write_unsigned_list(bundle: Path, work: Path) -> None:
 
 def package(target: str, out: Path, work: Path) -> Path:
     windows = target.startswith("win32")
-    bundle = work / "hermes-slim"
+    bundle = work / "talos"
     python = bundle / "python" / ("python.exe" if windows else "bin/python3")
     out.mkdir(parents=True, exist_ok=True)
     rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip() or "dev"
@@ -349,7 +349,7 @@ def package(target: str, out: Path, work: Path) -> Path:
                              capture_output=True, text=True).stdout.strip() or rev
     (bundle / "BUNDLE.json").write_text(json.dumps(
         {"target": target, "commit": rev, "version": version, "extras": EXTRAS}, indent=2))
-    name = f"hermes-slim-{rev}-{target}"
+    name = f"talos-{rev}-{target}"
     if windows:
         archive = out / f"{name}.zip"
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
@@ -360,7 +360,7 @@ def package(target: str, out: Path, work: Path) -> Path:
         # The host Python may predate compression.zstd (3.14); the bundled one never does.
         archive = out / f"{name}.tar.zst"
         run([python, "-c", "import sys, tarfile; t = tarfile.open(sys.argv[1], 'w:zst', level=9); "
-                           "t.add(sys.argv[2], arcname='hermes-slim'); t.close()", archive, bundle])
+                           "t.add(sys.argv[2], arcname='talos'); t.close()", archive, bundle])
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (out / f"{archive.name}.sha256").write_text(f"{digest}  {archive.name}\n")
     print(f"bundle: {archive} ({archive.stat().st_size // (1 << 20)} MiB) sha256={digest}")
@@ -375,12 +375,12 @@ def main() -> None:
     ap.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
     step = ap.add_mutually_exclusive_group()
     step.add_argument("--stage-only", action="store_true",
-                      help="assemble WORK/hermes-slim and stop (Windows CI signs it next)")
-    step.add_argument("--package-only", action="store_true", help="archive an already staged WORK/hermes-slim")
+                      help="assemble WORK/talos and stop (Windows CI signs it next)")
+    step.add_argument("--package-only", action="store_true", help="archive an already staged WORK/talos")
     args = ap.parse_args()
     if args.target != host_target():
         raise SystemExit(f"bundles build natively: host is {host_target()}, asked for {args.target}")
-    work = args.work or Path(tempfile.mkdtemp(prefix="hermes-slim-build-"))
+    work = args.work or Path(tempfile.mkdtemp(prefix="talos-build-"))
     work.mkdir(parents=True, exist_ok=True)
     if not args.package_only:
         stage(args.target, args.wheels, work.resolve())

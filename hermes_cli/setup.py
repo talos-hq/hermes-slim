@@ -666,7 +666,7 @@ _FIRST_TIME_MODES = (
     ("Full setup — configure every provider, tool & option yourself (bring your own keys)", None),
     ("Blank Slate — everything off except the bare minimum; opt in to each capability", "_run_blank_slate_setup"),
 )
-if os.environ.get("HERMES_SLIM"):  # hermes-slim: no Nous Portal quick setup
+if os.environ.get("TALOS") or os.environ.get("HERMES_SLIM"):  # talos (HERMES_SLIM: legacy name): no Nous Portal quick setup
     _FIRST_TIME_MODES = _FIRST_TIME_MODES[1:]
 
 

@@ -13,4 +13,4 @@ for cmd in "update --check" "update" "doctor" "pm status" "tools list"; do
   echo "[exit $?]"
 done
 echo "===== files written inside the install dir"
-find "$HOME/.hermes-slim/current" -newer "$HOME/.hermes-slim/current/BUNDLE.json" -type f | grep -v __pycache__ | head
+find "$HOME/.talos/current" -newer "$HOME/.talos/current/BUNDLE.json" -type f | grep -v __pycache__ | head
