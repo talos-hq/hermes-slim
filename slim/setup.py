@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""talos setup: configure Hermes for OpenRouter and bring the gateway up.
+"""hermes-slim setup: configure Hermes for OpenRouter and bring the gateway up.
 
 Interactive by default. Every value also has a flag and an environment
 variable, so CI (and scripted installs) can run with --non-interactive:
 
-    talos-setup --non-interactive --first-name "Ada" --last-name "Lovelace" \\
+    hermes-slim-setup --non-interactive --first-name "Ada" --last-name "Lovelace" \\
         --openrouter-key sk-or-... --skip-online-checks
 
 Writes the same config.yaml / .env keys Hermes' own wizard writes when the user
@@ -126,7 +126,7 @@ def write_config(first: str, last: str, key: str, model: str, api_port: int) -> 
     hc.save_env_value("API_SERVER_PORT", str(api_port))
     # Hermes loads .env into the environment before provider plugins, so this keeps
     # Nous hidden in processes the launchers don't start (launchd/systemd/task gateway).
-    hc.save_env_value("TALOS", "1")
+    hc.save_env_value("HERMES_SLIM", "1")
 
     cfg = hc.load_config()
     m = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
@@ -261,7 +261,7 @@ def restart_gateway(args) -> dict:
 
     env = _read_env(hc.get_env_path())
     if not env.get("OPENROUTER_API_KEY"):
-        raise SetupError("no existing configuration to keep; run talos-setup")
+        raise SetupError("no existing configuration to keep; run hermes-slim-setup")
     port = int(env.get("API_SERVER_PORT") or args.api_port)
     log = hc.get_config_path().parent / "logs" / "slim-gateway.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +282,7 @@ def main(argv=None) -> int:
         return 0
     try:
         if interactive:
-            print("talos setup — OpenRouter + DeepSeek\n")
+            print("hermes-slim setup — OpenRouter + DeepSeek\n")
         first = ask("First name", args.first_name, lambda v: clean_name(v, "first name"), interactive=interactive)
         last = ask("Last name", args.last_name, lambda v: clean_name(v, "last name"), interactive=interactive)
         while True:

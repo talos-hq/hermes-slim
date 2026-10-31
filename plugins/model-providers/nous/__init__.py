@@ -74,8 +74,8 @@ nous = NousProfile(
     display_name="Nous Research", description="Nous Research — Hermes model family",
     signup_url="https://nousresearch.com/", fallback_models=("hermes-3-405b", "hermes-3-70b"),
     base_url="https://inference-api.nousresearch.com/v1", auth_type="oauth_device_code",
-    # talos: keep Nous resolvable by name but out of every picker.
-    hidden=bool(os.environ.get("TALOS") or os.environ.get("HERMES_SLIM")),  # HERMES_SLIM: legacy name
+    # hermes-slim: keep Nous resolvable by name but out of every picker.
+    hidden=bool(os.environ.get("HERMES_SLIM")),
 )
 
 register_provider(nous)

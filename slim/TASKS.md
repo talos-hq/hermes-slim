@@ -1,11 +1,11 @@
-# talos task list
+# hermes-slim task list
 
 ## Phase 1: install + gateway
-- [x] Wheels org (`hermes-slim/wheels`), fork `talos-hq/hermes-slim` (moved from the wheels org), `upstream` branch mirroring NousResearch main
+- [x] Org `hermes-slim` (wheels), fork `talos-hq/hermes-slim` (moved from hermes-slim/hermes), `upstream` branch mirroring NousResearch main
 - [x] Repo `hermes-slim/wheels` + cryptography 50.0.2 macOS x86_64 wheel job (static OpenSSL)
 - [x] `slim/build_bundle.py`: relocatable CPython + locked deps (`--no-build`) + source + launchers
 - [x] `slim/setup.py`: TUI prompts / flags / env vars, validation, OpenRouter + DeepSeek autofill, gateway health
-- [x] Hide Nous Portal / login / models when `TALOS=1`
+- [x] Hide Nous Portal / login / models when `HERMES_SLIM=1`
 - [x] `slim/smoke_test.py` end-to-end client test
 - [x] Unit tests (`slim/tests`)
 - [x] `slim-bundle.yml`: build + smoke on win32-x64, darwin-x64, darwin-arm64, linux-x64-musl; release on `v*` tags
@@ -15,7 +15,7 @@
 - [x] Disable upstream's own workflows in the fork (57 disabled via the Actions API)
 - [ ] Add repo secrets: `SYNC_TOKEN` (repo+workflow), optional `OPENROUTER_API_KEY` for the live test
 - [x] First release tag `v0.1.0`
-- [x] Pass `TALOS=1` into the gateway service environment (written to `~/.hermes/.env`)
+- [x] Pass `HERMES_SLIM=1` into the gateway service environment (written to `~/.hermes/.env`)
 
 ## Phase 2: Telegram
 - [ ] Prompt for Telegram user id (numeric) and 4 bot tokens; show BotFather the username

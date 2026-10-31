@@ -1,6 +1,6 @@
 name: slim-bundle
 
-# Build the talos bundle natively on every target, then install and
+# Build the hermes-slim bundle natively on every target, then install and
 # smoke-test it the way a client would (slim/smoke_test.py). Tags v* publish
 # the bundles as a GitHub release.
 
@@ -103,7 +103,7 @@ jobs:
         if: matrix.target == 'win32-x64'
         shell: pwsh
         run: |
-          $bad = Get-ChildItem -Recurse -File "$env:RUNNER_TEMP/hs-work/talos" -Include *.exe,*.dll,*.pyd |
+          $bad = Get-ChildItem -Recurse -File "$env:RUNNER_TEMP/hs-work/hermes-slim" -Include *.exe,*.dll,*.pyd |
             Get-AuthenticodeSignature | Where-Object Status -ne 'Valid'
           $bad | ForEach-Object { Write-Host "$($_.Status)  $($_.Path)" }
           if ($bad) {
@@ -119,10 +119,10 @@ jobs:
       - name: Smoke test
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: ${{ steps.py.outputs.bin }} slim/smoke_test.py "$(ls dist/talos-*-${{ matrix.target }}.zip dist/talos-*-${{ matrix.target }}.tar.zst 2>/dev/null | head -1)"
+        run: ${{ steps.py.outputs.bin }} slim/smoke_test.py "$(ls dist/hermes-slim-*-${{ matrix.target }}.zip dist/hermes-slim-*-${{ matrix.target }}.tar.zst 2>/dev/null | head -1)"
       - uses: actions/upload-artifact@v4
         with:
-          name: talos-${{ matrix.target }}
+          name: hermes-slim-${{ matrix.target }}
           path: dist/
           retention-days: 3
 

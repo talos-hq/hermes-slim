@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""`hermes update` for a talos bundle (the launchers route `update` here).
+"""`hermes update` for a hermes-slim bundle (the launchers route `update` here).
 
 Hermes' own updater moves a git checkout, and with none here tells the user to
 reinstall upstream with its long git + pip installer. A bundle is updated by
 installing the newest bundle over it with slim/install.sh --upgrade, which keeps
-the configuration and restarts the gateway. install.sh also finds releases
-published before the rename (assets with the legacy prefix), and an install in
-the legacy directory is upgraded where it is (--dir is passed explicitly).
+the configuration and restarts the gateway.
 
     hermes update [--check] [--version vX.Y.Z | --archive FILE]
 """
