@@ -560,6 +560,24 @@ export const zhHantCommandCenter = {
     promptScheduleRequired: '提示詞和排程為必填項目。',
     scheduleRequired: '排程為必填項目。',
     scriptOnlyEditHint: '僅腳本任務（無 AI 提示詞）。任務 ID：',
+    more: {
+      title: '更多欄位',
+      listHint: '以逗號分隔',
+      repeatHint: '執行次數；留空 = 永久',
+      labels: {
+        baseUrl: '覆寫 Base URL',
+        contextFrom: '上下文來源工作',
+        failureDeliver: '失敗通知傳送到',
+        noAgent: '僅腳本（無代理）',
+        reasoningEffort: '推理強度',
+        repeat: '重複',
+        script: '腳本',
+        skills: '技能',
+        timezone: '時區',
+        toolsets: '工具集',
+        workdir: '工作目錄'
+      }
+    },
     saveChanges: '儲存變更',
     createAction: '建立排程工作',
     tabs: {

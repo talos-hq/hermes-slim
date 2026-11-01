@@ -1051,6 +1051,16 @@ export interface AnalyticsTotals {
 export interface CronJob {
   /** Missed-run policy: true runs one catch-up, false skips; null/absent follows the default. */
   catch_up?: boolean | null
+  base_url?: null | string
+  context_from?: null | string[]
+  enabled_toolsets?: null | string[]
+  failure_deliver?: null | string | string[]
+  reasoning_effort?: null | string
+  repeat?: null | { completed?: number; times?: null | number }
+  skill?: null | string
+  skills?: null | string[]
+  timezone?: null | string
+  workdir?: null | string
   deliver?: null | string
   enabled: boolean
   id: string
@@ -1106,6 +1116,18 @@ export interface CronJobSchedule {
 
 export interface CronJobUpdates {
   catch_up?: boolean | null
+  base_url?: string
+  context_from?: string[]
+  enabled_toolsets?: null | string[]
+  failure_deliver?: string
+  no_agent?: boolean
+  reasoning_effort?: string
+  /** Run count; 0 = forever. */
+  repeat?: number
+  script?: string
+  skills?: string[]
+  timezone?: string
+  workdir?: string
   deliver?: string
   enabled?: boolean
   model?: null | string

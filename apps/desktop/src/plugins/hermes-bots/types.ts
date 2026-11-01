@@ -324,6 +324,7 @@ export interface GroupActivityEvent {
  * typecheck against fields that never arrive.
  */
 export interface RoutineJob {
+  continuity?: boolean
   deliver?: string
   enabled?: boolean
   job_id: string
@@ -340,6 +341,7 @@ export interface RoutineJob {
   prompt_preview?: string
   repeat?: number | string
   schedule?: string
+  skills?: string[]
   state?: string
   workdir?: string
 }

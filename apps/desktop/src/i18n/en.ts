@@ -3057,6 +3057,24 @@ export const en: Translations = {
     promptScheduleRequired: 'Prompt and schedule are required.',
     scheduleRequired: 'Schedule is required.',
     scriptOnlyEditHint: 'Script-only job (no AI prompt). Job id:',
+    more: {
+      title: 'More fields',
+      listHint: 'Comma-separated',
+      repeatHint: 'Number of runs; blank = forever',
+      labels: {
+        baseUrl: 'Base URL override',
+        contextFrom: 'Context from jobs',
+        failureDeliver: 'Deliver failures to',
+        noAgent: 'Script only (no agent)',
+        reasoningEffort: 'Reasoning effort',
+        repeat: 'Repeat',
+        script: 'Script',
+        skills: 'Skills',
+        timezone: 'Timezone',
+        toolsets: 'Toolsets',
+        workdir: 'Working directory'
+      }
+    },
     saveChanges: 'Save changes',
     createAction: 'Create cron',
     tabs: {

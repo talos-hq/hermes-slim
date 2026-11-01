@@ -3492,6 +3492,24 @@ export const deOverrides = {
     promptScheduleRequired: 'Prompt und Zeitplan sind erforderlich.',
     scheduleRequired: 'Zeitplan ist erforderlich.',
     scriptOnlyEditHint: 'Nur-Skript-Job (ohne AI-Prompt). Job-ID:',
+    more: {
+      title: 'Weitere Felder',
+      listHint: 'Durch Kommas getrennt',
+      repeatHint: 'Anzahl der Läufe; leer = unbegrenzt',
+      labels: {
+        baseUrl: 'Basis-URL überschreiben',
+        contextFrom: 'Kontext aus Jobs',
+        failureDeliver: 'Fehler zustellen an',
+        noAgent: 'Nur Skript (ohne Agent)',
+        reasoningEffort: 'Denkaufwand',
+        repeat: 'Wiederholen',
+        script: 'Skript',
+        skills: 'Skills',
+        timezone: 'Zeitzone',
+        toolsets: 'Toolsets',
+        workdir: 'Arbeitsverzeichnis'
+      }
+    },
     saveChanges: 'Änderungen speichern',
     createAction: 'Cron erstellen',
     tabs: {

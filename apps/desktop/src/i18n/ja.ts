@@ -2040,6 +2040,24 @@ export const jaOverrides = {
     promptScheduleRequired: 'プロンプトとスケジュールは必須です。',
     scheduleRequired: 'スケジュールは必須です。',
     scriptOnlyEditHint: 'スクリプトのみのジョブ（AI プロンプトなし）。ジョブ ID:',
+    more: {
+      title: 'その他の項目',
+      listHint: 'カンマ区切り',
+      repeatHint: '実行回数。空欄 = 無期限',
+      labels: {
+        baseUrl: 'ベース URL の上書き',
+        contextFrom: 'コンテキスト元のジョブ',
+        failureDeliver: '失敗の配信先',
+        noAgent: 'スクリプトのみ（エージェントなし）',
+        reasoningEffort: '推論の強さ',
+        repeat: '繰り返し',
+        script: 'スクリプト',
+        skills: 'スキル',
+        timezone: 'タイムゾーン',
+        toolsets: 'ツールセット',
+        workdir: '作業ディレクトリ'
+      }
+    },
     saveChanges: '変更を保存',
     createAction: 'Cron を作成',
     tabs: {

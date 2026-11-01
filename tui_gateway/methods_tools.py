@@ -1302,6 +1302,42 @@ def _configure_session_tools(rid, params: dict, sid: str, session) -> dict:
 
 
 # ─── Cron / learning / skills ────────────────────────────────────────────────
+_CRON_UPDATE_TEXT_KEYS = (
+    "prompt", "schedule", "deliver", "model", "provider", "workdir", "script", "reasoning_effort")
+
+
+def _cron_update_kwargs(params: dict) -> dict:
+    """Only the keys the client sent: absent keeps the stored value, ``""`` clears an optional
+    field; ``name`` is the job's NEW title. A blank schedule or prompt is never an edit."""
+    out: dict = {key: str(params[key]) for key in _CRON_UPDATE_TEXT_KEYS if params.get(key) is not None}
+    for key in ("schedule", "prompt"):
+        if key in out and not out[key].strip():
+            del out[key]
+    if params.get("job_id") and params.get("name") is not None:
+        out["name"] = str(params["name"])
+    if params.get("repeat") is not None:
+        raw = str(params["repeat"]).strip()
+        out["repeat"] = int(raw) if raw.isdigit() else 0  # ''/0 → forever
+    if params.get("continuity") is not None:
+        out["continuity"] = is_truthy_value(params["continuity"])
+    for key in ("skills", "enabled_toolsets"):
+        if isinstance(params.get(key), list):
+            out[key] = [str(v).strip() for v in params[key] if str(v).strip()]
+    return out
+
+
+def _attach_full_prompts(result: dict) -> None:
+    """Add each row's full ``prompt``; the list formatter only carries a 100-char preview."""
+    rows = result.get("jobs")
+    if not isinstance(rows, list) or not rows:
+        return
+    from cron.jobs import load_jobs
+    prompts = {str(j.get("id")): str(j.get("prompt") or "") for j in load_jobs()}
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("job_id")) in prompts:
+            row["prompt"] = prompts[str(row["job_id"])]
+
+
 @_scoped_rpc("cron.manage", 5023)
 def _(rid, params: dict) -> dict:
     """cronjob() keys off HERMES_HOME, so ``profile`` reaches a per-profile cron store."""
@@ -1311,6 +1347,7 @@ def _(rid, params: dict) -> dict:
         # Paused jobs are excluded by default (reads as deletion in a toggle UI) — forward the flag.
         include_disabled = is_truthy_value(params.get("include_disabled", False))
         result = json.loads(cronjob(action="list", include_disabled=include_disabled))
+        _attach_full_prompts(result)
         # ``scoped`` proves the profile scope was honored; older gateways omit it and clients
         # keep the safe [bot:<name>] filter.
         if profile := _str_arg(params, "profile"):
@@ -1324,6 +1361,9 @@ def _(rid, params: dict) -> dict:
             continuity=is_truthy_value(params.get("continuity")) if params.get("continuity") is not None else None,
             deliver=_str_arg(params, "deliver") or None)
         return _ok(rid, json.loads(raw))
+    if action == "update":
+        return _ok(rid, json.loads(cronjob(
+            action="update", job_id=_str_arg(params, "job_id") or jid, **_cron_update_kwargs(params))))
     if action in {"remove", "pause", "resume"}:
         return _ok(rid, json.loads(cronjob(action=action, job_id=jid)))
     return _err(rid, 4016, f"unknown cron action: {action}")

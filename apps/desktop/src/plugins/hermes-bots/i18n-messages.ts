@@ -401,6 +401,13 @@ export type BotsMessages = {
     stopAfter: string
     runsHint: string
     detailDescription: string
+    edit: string
+    editTitle: string
+    editDescription: string
+    updated: string
+    skillsLabel: string
+    repeatHint: string
+    scheduleHint: string
     status: string
     active: string
     paused: string

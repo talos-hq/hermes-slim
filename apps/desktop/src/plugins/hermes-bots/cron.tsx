@@ -41,6 +41,7 @@ import { useState } from 'react'
 
 import { avatarColor, botAppearance, BotFace } from './avatar'
 import { $focusedBotOwner, $selectedBot, focusedRosterOwner } from './bot-state'
+import { EditRoutineDialog } from './cron-edit'
 import { $botMeta, $lastRoster, botHandle, botRosterKey, botSelectionKey, isActiveRosterBot } from './data'
 import { labeled } from './dialog-parts'
 import { botsText, type BotsText, useBots } from './i18n'
@@ -72,8 +73,8 @@ function showsHandle(name: string, meta: BotMeta | null | undefined, bot?: Roste
 // bot profile uses the plain instruction; a different profile keeps the
 // hermes -p <bot> chat delegation wrapper so the run reaches that bot's
 // history. The tile follows the bot you're chatting with (gateway profile).
-const BOT_TAG_RE = /^\[bot:([a-z0-9][a-z0-9_-]*)\]\s*/i
-const SAFE_ROUTINE_MARKER = '[bot-mode:routine:v2] '
+export const BOT_TAG_RE = /^\[bot:([a-z0-9][a-z0-9_-]*)\]\s*/i
+export const SAFE_ROUTINE_MARKER = '[bot-mode:routine:v2] '
 const LEGACY_DELEGATED_ROUTINE_PREFIX = 'You are running the scheduled routine "'
 
 /** A routine's owner: a roster row, a bare profile name, or nothing resolved yet. */
@@ -419,18 +420,20 @@ export function routineDetailIssue(job: RoutineJob | null | undefined): null | s
 interface RoutineDetailDialogProps {
   job: RoutineJob | null
   onClose: () => void
+  /** Opens the editor; absent for legacy delegated routines, which must be recreated. */
+  onEdit?: () => void
   open: boolean
 }
 
 /** Read-only inspector for one cronjob, rendered from the list payload the
  *  pane already holds — no extra RPC, and no second mutation path beside the
  *  row's own switch and delete. */
-export function RoutineDetailDialog({ job, onClose, open }: RoutineDetailDialogProps) {
+export function RoutineDetailDialog({ job, onClose, onEdit, open }: RoutineDetailDialogProps) {
   const b = useBots()
   const { t } = useI18n()
   const rows = job ? routineDetailRows(job, b.cron) : []
   const issue = job ? routineDetailIssue(job) : null
-  const instruction = String(job?.prompt_preview || '').trim()
+  const instruction = String(job?.prompt || job?.prompt_preview || '').trim()
 
   return (
     <Dialog
@@ -470,6 +473,12 @@ export function RoutineDetailDialog({ job, onClose, open }: RoutineDetailDialogP
             : null}
         </div>
         <DialogFooter>
+          {onEdit ? (
+            <Button onClick={onEdit} variant="secondary">
+              <Codicon name="edit" />
+              {b.cron.edit}
+            </Button>
+          ) : null}
           <Button onClick={onClose} variant="secondary">
             {t.common.close}
           </Button>
@@ -1225,6 +1234,7 @@ export function RoutinesPane() {
   // an open inspector must follow the live row (next run, pause, last error)
   // instead of freezing the snapshot that was on screen when it opened.
   const [detailJobId, setDetailJobId] = useState<null | string>(null)
+  const [editJobId, setEditJobId] = useState<null | string>(null)
   const createTarget = owner ? routineCreateTarget(createOwner, bot) : null
 
   const openCreate = () => {
@@ -1248,6 +1258,7 @@ export function RoutinesPane() {
 
   const jobs = view.jobs
   const detailJob = detailJobId ? jobs.find(job => job.job_id === detailJobId) || null : null
+  const editJob = editJobId ? jobs.find(job => job.job_id === editJobId) || null : null
 
   const staleNotice = error && !view.live && view.all.length ? b.cron.staleNotice : null
 
@@ -1325,7 +1336,20 @@ export function RoutinesPane() {
           </div>
         </div>
       )}
-      <RoutineDetailDialog job={detailJob} onClose={() => setDetailJobId(null)} open={Boolean(detailJob)} />
+      <RoutineDetailDialog
+        job={detailJob}
+        onClose={() => setDetailJobId(null)}
+        onEdit={
+          detailJob && !isLegacyDelegatedRoutine(detailJob)
+            ? () => {
+                setEditJobId(detailJob.job_id)
+                setDetailJobId(null)
+              }
+            : undefined
+        }
+        open={Boolean(detailJob)}
+      />
+      <EditRoutineDialog job={editJob} onClose={() => setEditJobId(null)} owner={owner} />
       <CreateRoutineDialog
         // Non-null past the `!owner` early return above: `routineCreateTarget`
         // falls back to the active profile name.
