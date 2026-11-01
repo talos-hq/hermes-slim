@@ -3498,6 +3498,24 @@ export const frOverrides = {
     promptScheduleRequired: "L'invite et le planning sont requis.",
     scheduleRequired: 'Le planning est requis.',
     scriptOnlyEditHint: "Tâche script uniquement (pas d'invite IA). ID de tâche :",
+    more: {
+      title: 'Plus de champs',
+      listHint: 'Séparés par des virgules',
+      repeatHint: 'Nombre d’exécutions ; vide = toujours',
+      labels: {
+        baseUrl: 'URL de base personnalisée',
+        contextFrom: 'Contexte depuis les tâches',
+        failureDeliver: 'Envoyer les échecs à',
+        noAgent: 'Script seul (sans agent)',
+        reasoningEffort: 'Effort de raisonnement',
+        repeat: 'Répéter',
+        script: 'Script',
+        skills: 'Skills',
+        timezone: 'Fuseau horaire',
+        toolsets: 'Toolsets',
+        workdir: 'Répertoire de travail'
+      }
+    },
     saveChanges: 'Enregistrer les modifications',
     createAction: 'Créer le cron',
     tabs: {

@@ -34,6 +34,7 @@ import {
   createCronJob,
   type CronDeliveryTarget,
   type CronJob,
+  type CronJobUpdates,
   deleteCronJob,
   getAutomationBlueprints,
   getCronDeliveryTargets,
@@ -88,6 +89,7 @@ import {
   validateCronEditor
 } from './cron-job-model'
 import { jobState, jobTitle, nextRunOverdueMs, STATE_DOT, truncateText } from './job-state'
+import { MoreFields, moreFieldsFromJob, type MoreFieldsState, moreFieldsUpdates } from './more-fields'
 import { isCronRunRow, openCronRun, reconcileCronRunVerdicts } from './open-cron-run'
 import { catchUpChoice, catchUpValue, jobLastCancelReason, jobRunLive } from './run-control'
 import { LastCancelledNote, RunStopAction } from './run-stop-action'
@@ -667,7 +669,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
         refreshError,
         stale
       } = await mutateAndRefreshCronJobs(profile, () =>
-        updateCronJob(editor.job.id, cronEditorUpdates(values, { scriptOnlyJob }))
+        updateCronJob(editor.job.id, { ...cronEditorUpdates(values, { scriptOnlyJob }), ...values.more })
       )
 
       if (stale || !updated) {
@@ -1284,6 +1286,7 @@ function CronEditorDialog({
   // MODEL_DEFAULT_VALUE = follow the global default.
   const [modelChoice, setModelChoice] = useState(MODEL_DEFAULT_VALUE)
   const [catchUp, setCatchUp] = useState(catchUpChoice(null))
+  const [more, setMore] = useState<MoreFieldsState>(() => moreFieldsFromJob(null))
   // Blueprint fills typed slots (time/enum/weekdays/text) instead of the raw
   // cron fields; the backend renders the prompt + schedule from them.
   const [slotValues, setSlotValues] = useState<Record<string, string>>({})
@@ -1341,6 +1344,7 @@ function CronEditorDialog({
       initial && jobModel(initial) ? cronModelChoiceValue(jobProvider(initial), jobModel(initial)) : MODEL_DEFAULT_VALUE
     )
     setCatchUp(catchUpChoice(initial?.catch_up))
+    setMore(moreFieldsFromJob(initial))
     setSlotValues({})
     setTemplateChoice(editor.mode === 'create' ? (editor.blueprintKey ?? CUSTOM_TEMPLATE) : CUSTOM_TEMPLATE)
     setError(null)
@@ -1416,6 +1420,7 @@ function CronEditorDialog({
     try {
       await onSave({
         catchUp: catchUp === catchUpChoice(initial?.catch_up) ? undefined : catchUpValue(catchUp),
+        more: initial ? moreFieldsUpdates(moreFieldsFromJob(initial), more, initial) : undefined,
         deliver,
         model: override?.model ?? '',
         name: name.trim(),
@@ -1615,6 +1620,8 @@ function CronEditorDialog({
 
             <CatchUpField c={c} onChange={setCatchUp} value={catchUp} />
 
+            {isEdit ? <MoreFields c={c} onChange={setMore} value={more} /> : null}
+
             {schedulePreset === 'custom' ? (
               <Field htmlFor="cron-schedule" label={c.customScheduleLabel}>
                 <Input
@@ -1665,6 +1672,8 @@ type EditorState =
   | { blueprintKey?: string; mode: 'create' }
 
 interface EditorValues {
+  /** Edit only: the changed fields beyond the core form (skills, repeat, workdir, …). */
+  more?: CronJobUpdates
   /** Missed-run policy; undefined = unchanged (not sent). */
   catchUp?: boolean | null
   deliver: string

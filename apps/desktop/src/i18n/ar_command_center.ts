@@ -521,6 +521,24 @@ export const arCommandCenter = {
     failedRename: 'فشل إعادة التسمية'
   },
   cron: {
+    more: {
+      title: 'حقول إضافية',
+      listHint: 'مفصولة بفواصل',
+      repeatHint: 'عدد مرات التشغيل؛ فارغ = دائمًا',
+      labels: {
+        baseUrl: 'تجاوز عنوان URL الأساسي',
+        contextFrom: 'السياق من المهام',
+        failureDeliver: 'إرسال الإخفاقات إلى',
+        noAgent: 'سكربت فقط (بدون وكيل)',
+        reasoningEffort: 'مستوى الاستدلال',
+        repeat: 'التكرار',
+        script: 'السكربت',
+        skills: 'المهارات',
+        timezone: 'المنطقة الزمنية',
+        toolsets: 'مجموعات الأدوات',
+        workdir: 'مجلد العمل'
+      }
+    },
     control: arCronControl,
     close: 'إغلاق',
     search: 'بحث',

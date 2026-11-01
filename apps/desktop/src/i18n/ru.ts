@@ -2293,6 +2293,24 @@ export const ruOverrides = {
     promptScheduleRequired: 'Промпт и расписание обязательны.',
     scheduleRequired: 'Расписание обязательно.',
     scriptOnlyEditHint: 'Задача только со скриптом (без AI-промпта). ID задачи:',
+    more: {
+      title: 'Другие поля',
+      listHint: 'Через запятую',
+      repeatHint: 'Число запусков; пусто = всегда',
+      labels: {
+        baseUrl: 'Переопределить базовый URL',
+        contextFrom: 'Контекст из задач',
+        failureDeliver: 'Отправлять ошибки в',
+        noAgent: 'Только скрипт (без агента)',
+        reasoningEffort: 'Глубина рассуждений',
+        repeat: 'Повторы',
+        script: 'Скрипт',
+        skills: 'Навыки',
+        timezone: 'Часовой пояс',
+        toolsets: 'Наборы инструментов',
+        workdir: 'Рабочий каталог'
+      }
+    },
     saveChanges: 'Сохранить изменения',
     createAction: 'Создать cron',
     tabs: {

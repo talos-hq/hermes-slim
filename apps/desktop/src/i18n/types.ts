@@ -2670,6 +2670,24 @@ export interface Translations extends NoticeTranslations {
     promptScheduleRequired: string
     scheduleRequired: string
     scriptOnlyEditHint: string
+    more: {
+      title: string
+      listHint: string
+      repeatHint: string
+      labels: {
+        baseUrl: string
+        contextFrom: string
+        failureDeliver: string
+        noAgent: string
+        reasoningEffort: string
+        repeat: string
+        script: string
+        skills: string
+        timezone: string
+        toolsets: string
+        workdir: string
+      }
+    }
     saveChanges: string
     createAction: string
     tabs: {

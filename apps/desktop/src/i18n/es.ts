@@ -3480,6 +3480,24 @@ export const esOverrides = {
     promptScheduleRequired: 'El prompt y la programación son obligatorios.',
     scheduleRequired: 'La programación es obligatoria.',
     scriptOnlyEditHint: 'Tarea solo con script (sin prompt de IA). ID de la tarea:',
+    more: {
+      title: 'Más campos',
+      listHint: 'Separados por comas',
+      repeatHint: 'Número de ejecuciones; vacío = siempre',
+      labels: {
+        baseUrl: 'URL base personalizada',
+        contextFrom: 'Contexto de tareas',
+        failureDeliver: 'Entregar fallos a',
+        noAgent: 'Solo script (sin agente)',
+        reasoningEffort: 'Esfuerzo de razonamiento',
+        repeat: 'Repetir',
+        script: 'Script',
+        skills: 'Skills',
+        timezone: 'Zona horaria',
+        toolsets: 'Toolsets',
+        workdir: 'Directorio de trabajo'
+      }
+    },
     saveChanges: 'Guardar cambios',
     createAction: 'Crear cron',
     tabs: {

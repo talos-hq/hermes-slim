@@ -441,11 +441,22 @@ class CronAction(WireEnum):
     remove = "remove"
     pause = "pause"
     resume = "resume"
+    update = "update"
 
 
 class CronManageParams(Params):
     action: CronAction = CronAction.list
+    # remove/pause/resume: the job id (or name). update: the NEW name (blank keeps it); the job is
+    # addressed by ``job_id`` so a rename is never mistaken for the reference.
     name: str | None = None
+    job_id: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    workdir: str | None = None
+    skills: list[str] | None = None
+    enabled_toolsets: list[str] | None = None
+    script: str | None = None
+    reasoning_effort: str | None = None
     include_disabled: bool | str | None = None
     schedule: str | None = None
     prompt: str | None = None
@@ -463,6 +474,9 @@ class CronJobRow(_Open):
     skill: str | None = None
     skills: list[str] = Field(default_factory=list)
     prompt_preview: str = ""
+    # Full stored prompt: ``list`` adds it so an editor can prefill the body (the preview is cut at
+    # 100 chars and would truncate the prompt on save).
+    prompt: str | None = None
     model: str | None = None
     provider: str | None = None
     base_url: str | None = None
@@ -502,7 +516,7 @@ class CronRemovedJob(Result):
 class CronManageResult(_Open):
     """Pass-through of ``tools/cronjob_tools.py::cronjob`` JSON: ``list`` → ``jobs``/``count``
     (+ ``scoped`` when profile-scoped); ``add`` → the created job's summary + ``job``; ``remove`` →
-    ``removed_job``; ``pause``/``resume`` → ``job``. A tool-level failure lands in ``error``."""
+    ``removed_job``; ``pause``/``resume``/``update`` → ``job``. A tool-level failure lands in ``error``."""
 
     success: bool | None = None
     error: str | None = None
@@ -526,7 +540,7 @@ class CronManageResult(_Open):
 
 
 method("cron.manage", params=CronManageParams, result=CronManageResult,
-       doc="List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store.")
+       doc="List/add/update/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store.")
 
 
 # ── browser.manage ────────────────────────────────────────────────────────────────────────────

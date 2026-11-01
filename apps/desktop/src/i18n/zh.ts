@@ -2955,6 +2955,24 @@ export const zhOverrides = {
     promptScheduleRequired: '提示词和排程为必填项。',
     scheduleRequired: '排程为必填项。',
     scriptOnlyEditHint: '仅脚本任务（无 AI 提示词）。任务 ID：',
+    more: {
+      title: '更多字段',
+      listHint: '以逗号分隔',
+      repeatHint: '运行次数；留空 = 永久',
+      labels: {
+        baseUrl: '覆盖 Base URL',
+        contextFrom: '上下文来源任务',
+        failureDeliver: '失败通知发送到',
+        noAgent: '仅脚本（无代理）',
+        reasoningEffort: '推理强度',
+        repeat: '重复',
+        script: '脚本',
+        skills: '技能',
+        timezone: '时区',
+        toolsets: '工具集',
+        workdir: '工作目录'
+      }
+    },
     saveChanges: '保存更改',
     createAction: '创建定时任务',
     tabs: {
