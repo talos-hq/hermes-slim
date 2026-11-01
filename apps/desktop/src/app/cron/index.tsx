@@ -642,7 +642,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
       } = await mutateAndRefreshCronJobs(profile, () =>
         createCronJob({
           prompt: values.prompt,
-          schedule: values.schedule,
+          schedule: values.schedule ?? '',
           name: values.name || undefined,
           deliver: values.deliver || DEFAULT_DELIVER,
           ...(typeof values.catchUp === 'boolean' ? { catch_up: values.catchUp } : {}),
@@ -929,6 +929,11 @@ function CronJobDetail({
             <PanelAction disabled={busy} icon={isPaused ? 'play' : 'debug-pause'} onClick={onPauseResume}>
               {isPaused ? c.resumeTitle : c.pauseTitle}
             </PanelAction>
+            {/* Always reachable: Edit used to live only in the last-error banner and the
+                list row's context menu, so a healthy job's prompt read as uneditable. */}
+            <PanelAction disabled={busy} icon="edit" onClick={onEdit}>
+              {c.editJob}
+            </PanelAction>
             <PanelAction
               disabled={busy}
               icon={pendingRunAt === undefined ? 'zap' : 'loading'}
@@ -965,9 +970,6 @@ function CronJobDetail({
               </span>
             </div>
             <div className="flex items-center gap-0.5 pl-4">
-              <PanelAction disabled={busy} icon="edit" onClick={onEdit}>
-                {c.editJob}
-              </PanelAction>
               <PanelAction disabled={busy} icon="zap" onClick={onTrigger}>
                 {c.runAgain}
               </PanelAction>
@@ -1419,7 +1421,7 @@ function CronEditorDialog({
         name: name.trim(),
         prompt: prompt.trim(),
         provider: override?.provider ?? '',
-        schedule: schedule.trim()
+        schedule: initial && schedule.trim() === jobScheduleExpr(initial).trim() ? undefined : schedule.trim()
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : c.failedSave)
@@ -1672,7 +1674,8 @@ interface EditorValues {
   prompt: string
   /** Provider slug for the model override ('' = none). */
   provider: string
-  schedule: string
+  /** undefined on an edit that left the schedule untouched (not sent). */
+  schedule?: string
 }
 
 interface ScheduleOption {

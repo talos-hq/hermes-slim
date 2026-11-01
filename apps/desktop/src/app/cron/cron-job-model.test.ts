@@ -204,3 +204,12 @@ describe('nextRunOverdueMs', () => {
     expect(nextRunOverdueMs({ enabled: true, next_run_at: 'not-a-date' }, now)).toBeNull()
   })
 })
+
+describe('cronEditorUpdates schedule', () => {
+  it('omits an unchanged (undefined) schedule so an edit never re-anchors the next run', () => {
+    const base = { deliver: 'local', model: '', name: 'n', prompt: 'p', provider: '' }
+
+    expect(cronEditorUpdates(base, { scriptOnlyJob: false })).not.toHaveProperty('schedule')
+    expect(cronEditorUpdates({ ...base, schedule: ' every 2h ' }, { scriptOnlyJob: false }).schedule).toBe('every 2h')
+  })
+})
