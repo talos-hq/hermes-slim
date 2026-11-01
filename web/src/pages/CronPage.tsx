@@ -761,11 +761,16 @@ export default function CronPage() {
       focusCronField("edit-cron-script");
       return;
     }
+    // An untouched schedule is not re-sent: re-parsing it re-anchors an interval job's next
+    // run on every edit, and a one-shot's display ("once at …") does not parse back.
+    const unchangedSchedule =
+      payload.schedule === buildCronJobPayloadFromEditor(editorFormFromJob(editJob)).schedule;
+    const updates = unchangedSchedule ? { ...payload, schedule: undefined } : payload;
     setSaving(true);
     try {
       await api.updateCronJob(
         editJob.id,
-        payload,
+        updates,
         getJobProfile(editJob),
       );
       showToast("Saved changes ✓", "success");

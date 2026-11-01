@@ -51,7 +51,9 @@ export interface CronEditorSaveValues {
   prompt: string
   /** Provider for the model override ('' = none). Always paired with model. */
   provider: string
-  schedule: string
+  /** undefined = unchanged, not sent. Re-sending an untouched schedule re-anchors an interval's
+   *  next run on every edit, and a one-shot's display ("once at …") does not parse back at all. */
+  schedule?: string
 }
 
 export interface CronModelChoice {
@@ -137,8 +139,11 @@ export function lastErrorSummary(lastError: string | null | undefined): string {
 export function cronEditorUpdates(values: CronEditorSaveValues, options: { scriptOnlyJob: boolean }): CronJobUpdates {
   const updates: CronJobUpdates = {
     deliver: values.deliver,
-    name: values.name,
-    schedule: values.schedule.trim()
+    name: values.name
+  }
+
+  if (values.schedule !== undefined) {
+    updates.schedule = values.schedule.trim()
   }
 
   const trimmedPrompt = values.prompt.trim()
