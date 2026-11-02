@@ -68,18 +68,18 @@ jobs:
       - name: Require Azure signing vars
         shell: bash
         env:
-          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
-          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
-          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           missing=()
           for name in AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_CLIENT_ID AZURE_TENANT_ID; do
             [ -z "${!name}" ] && missing+=("$name")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Azure Trusted Signing vars missing from release-signing: ${missing[*]}"
+            echo "::error::Azure Trusted Signing vars missing (org secrets): ${missing[*]}"
             exit 1
           fi
 
@@ -97,8 +97,8 @@ jobs:
       - name: Azure login (OIDC)
         uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       - name: Mint federated token for the signing dlib
@@ -118,12 +118,12 @@ jobs:
         shell: bash
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
-          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
-          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
-          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ secrets.AZURE_SIGN_PUBLISHER }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_TOKEN_CREDENTIALS: prod
         run: |
           npm ci --workspace apps/desktop --include-workspace-root=false --prefer-online --no-audit --no-fund
@@ -186,7 +186,7 @@ jobs:
             [ -z "${!name}" ] && missing+=("$name")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::signing/notarization secrets missing from release-signing: ${missing[*]}"
+            echo "::error::signing/notarization secrets missing (org secrets): ${missing[*]}"
             exit 1
           fi
           p12="$RUNNER_TEMP/cert.p12"

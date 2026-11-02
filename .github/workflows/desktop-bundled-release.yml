@@ -477,6 +477,8 @@ jobs:
           - label: win32-x64
             runner: blacksmith-32vcpu-windows-2025
     env: &win32-env
+      # Step `if:` cannot read secrets; the Azure login steps gate on this instead.
+      AZURE_SIGNING_CONFIGURED: ${{ secrets.AZURE_CLIENT_ID != '' }}
       CHANNEL_BUILD: ${{ needs.validate.outputs.channel-build }}
       HERMES_DESKTOP_VARIANT: bundled
       HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
@@ -608,32 +610,32 @@ jobs:
         if: inputs.skip-signed != true && (inputs.upload_release == true || inputs.release-phase == 'candidate' || inputs.build_commit != '' || inputs.channel != '')
         shell: bash
         env:
-          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
-          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
-          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
-          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ secrets.AZURE_SIGN_PUBLISHER }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           missing=()
           for name in AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER AZURE_CLIENT_ID AZURE_TENANT_ID; do
             [ -z "${!name}" ] && missing+=("$name")
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::required Azure Trusted Signing vars are missing from release-signing: ${missing[*]}"
+            echo "::error::required Azure Trusted Signing vars are missing (org secrets): ${missing[*]}"
             exit 1
           fi
 
       - name: Azure login (OIDC)
-        if: vars.AZURE_CLIENT_ID != '' && inputs.skip-signed != true
+        if: env.AZURE_SIGNING_CONFIGURED == 'true' && inputs.skip-signed != true
         uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       - name: Mint federated token for the signing dlib
-        if: vars.AZURE_CLIENT_ID != '' && inputs.skip-signed != true
+        if: env.AZURE_SIGNING_CONFIGURED == 'true' && inputs.skip-signed != true
         shell: bash
         run: |
           file="$RUNNER_TEMP/azure-federated-token"
@@ -654,12 +656,12 @@ jobs:
         env:
           HERMES_BUNDLE_ENV_JSON: ${{ inputs.bundle_env }}
           PYTHONUTF8: '1'
-          AZURE_SIGN_ENDPOINT: ${{ inputs.skip-signed != true && vars.AZURE_SIGN_ENDPOINT || '' }}
-          AZURE_SIGN_ACCOUNT: ${{ inputs.skip-signed != true && vars.AZURE_SIGN_ACCOUNT || '' }}
-          AZURE_SIGN_PROFILE: ${{ inputs.skip-signed != true && vars.AZURE_SIGN_PROFILE || '' }}
-          AZURE_SIGN_PUBLISHER: ${{ inputs.skip-signed != true && vars.AZURE_SIGN_PUBLISHER || '' }}
-          AZURE_CLIENT_ID: ${{ inputs.skip-signed != true && vars.AZURE_CLIENT_ID || '' }}
-          AZURE_TENANT_ID: ${{ inputs.skip-signed != true && vars.AZURE_TENANT_ID || '' }}
+          AZURE_SIGN_ENDPOINT: ${{ inputs.skip-signed != true && secrets.AZURE_SIGNING_ENDPOINT || '' }}
+          AZURE_SIGN_ACCOUNT: ${{ inputs.skip-signed != true && secrets.AZURE_SIGNING_ACCOUNT || '' }}
+          AZURE_SIGN_PROFILE: ${{ inputs.skip-signed != true && secrets.AZURE_SIGNING_PROFILE || '' }}
+          AZURE_SIGN_PUBLISHER: ${{ inputs.skip-signed != true && secrets.AZURE_SIGN_PUBLISHER || '' }}
+          AZURE_CLIENT_ID: ${{ inputs.skip-signed != true && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_TENANT_ID: ${{ inputs.skip-signed != true && secrets.AZURE_TENANT_ID || '' }}
           AZURE_TOKEN_CREDENTIALS: prod
           SKIP_SIGNED: ${{ inputs.skip-signed }}
           SKIP_STORE: ${{ inputs.skip-store }}
@@ -981,7 +983,7 @@ jobs:
           [ -z "$CLOUDFLARE_R2_PUBLIC_URL" ] && missing+=(CLOUDFLARE_R2_PUBLIC_URL)
           [ -z "$CLOUDFLARE_R2_BUCKET" ] && missing+=(CLOUDFLARE_R2_BUCKET)
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::required signing/notarization credentials are missing from release-signing: ${missing[*]}"
+            echo "::error::required signing/notarization credentials are missing (org secrets): ${missing[*]}"
             exit 1
           fi
 
@@ -1517,10 +1519,10 @@ jobs:
       CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
       CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
       CLOUDFLARE_R2_PUBLIC_URL: ${{ needs.validate.outputs.public-root }}
-      AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
-      AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
-      AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
-      AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
+      AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+      AZURE_SIGN_PUBLISHER: ${{ secrets.AZURE_SIGN_PUBLISHER }}
     steps:
       # Full checkout: stage-msixbundle.mjs imports ./msix-shared.mjs and the
       # job runs it with no checkout at all today — ERR_MODULE_NOT_FOUND.
@@ -1591,8 +1593,8 @@ jobs:
         if: inputs.skip-signed != true
         uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       - name: Mint federated token for the signing dlib
@@ -1616,8 +1618,8 @@ jobs:
           SKIP_SIGNED: ${{ inputs.skip-signed }}
           SKIP_STORE: ${{ inputs.skip-store }}
           AZURE_TOKEN_CREDENTIALS: prod
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           # All modes stop at signed bytes. The separate handoff stages them
           # for smoke; publication must not assemble or sign a second time.
