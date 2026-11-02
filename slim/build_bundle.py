@@ -335,7 +335,8 @@ def write_unsigned_list(bundle: Path, work: Path) -> None:
     from pe_signatures import scan
 
     signed, unsigned = scan(bundle)
-    (work / "unsigned.txt").write_text("".join(f"{p}\n" for p in unsigned))
+    # The signing action resolves each catalog line against the catalog's own folder.
+    (work / "unsigned.txt").write_text("".join(f"{p.relative_to(work)}\n" for p in unsigned))
     print(f"{len(signed)} binaries signed upstream, {len(unsigned)} to sign: {work / 'unsigned.txt'}", flush=True)
 
 
