@@ -1,5 +1,30 @@
 # Building the Desktop Installers
 
+For a Linux source checkout, prepare its `.venv` and run `npm ci` at the
+repository root, then `npm --prefix apps/desktop run build`. Launch with:
+
+```bash
+node /absolute/path/to/hermes-slim/apps/desktop/scripts/linux-source-launch.mjs /absolute/path/to/electron --ozone-platform=wayland
+```
+
+Use that same command in the desktop entry's `Exec=` line. A user entry in
+`~/.local/share/applications/` with the same filename as the installed entry
+overrides it, including existing panel pins. Keep `HERMES_HOME` pointing at
+your existing user data. The launcher selects this checkout's Desktop,
+Python and Hermes CLI explicitly. Restart an already running Desktop and
+gateway when changing checkouts; a single-instance relaunch cannot replace
+their loaded code.
+For an environment outside `.venv`, set the existing
+`HERMES_DESKTOP_PYTHON` override to its absolute Python path; its adjacent
+`hermes` launcher must be installed from this checkout.
+
+On KDE Plasma, clicking this launcher moves the existing Hermes chat to the
+current virtual desktop before activating it. It requires `qdbus` and KWin's
+scripting service. Other applications and background notifications do not
+move. Without KDE it launches the source app with the desktop's usual focus
+behavior. The first positional argument selects Electron; when omitted it
+uses `electron` from `PATH`.
+
 Use the complete bundle builder for release artifacts. Ordinary `dist:*`
 commands package the current desktop build; they do not stage a fresh runtime.
 
