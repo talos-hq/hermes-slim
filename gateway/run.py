@@ -5084,6 +5084,7 @@ def main():
     # Before any config-dependent startup (watchdog, DB opens, provider resolution).
     from gateway.run_config_guard import guard_corrupt_user_config
     guard_corrupt_user_config()
+    from hermes_cli.resource_limits import apply_malloc_arena_max  # runs before any thread (glibc latches)
 
     # Advertise the harness to children (mirrors _advertise_agent_env in hermes_cli/main.py, inlined to
     # avoid its startup side effects). Value must equal registry id ``hermes-agent`` exactly.
@@ -5107,13 +5108,12 @@ def main():
         from hermes_cli.stdio import configure_windows_stdio
         configure_windows_stdio()
 
-    for _step in (_register_identity, _arm_watchdog, _utf8_stdio):
+    for _step in (apply_malloc_arena_max, _register_identity, _arm_watchdog, _utf8_stdio):
         _best_effort(_step)
 
-    # pm startup contract (PATH provisioning for the store's tools), then
-    # the post-update bootstrap: the same one-pass record-gated maintenance
-    # registry the CLI dispatch path runs (hermes_cli/main.py) — this
-    # entrypoint bypasses that dispatch, so run it here too. Never raises.
+    # pm startup contract (PATH provisioning for the store's tools), then the post-update bootstrap: the
+    # same one-pass record-gated maintenance registry the CLI dispatch path runs (hermes_cli/main.py) —
+    # this entrypoint bypasses that dispatch, so run it here too. Never raises.
     try:
         from hermes_cli.venv_sync import check_runtime
         from pm.paths import install_root
