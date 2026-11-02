@@ -52,8 +52,10 @@ jobs:
         shell: bash
     env:
       PYTHONUTF8: "1"
-      # Read by the signing step's `if` (a step's own env is not visible there).
+      # Read by the signing step's `if` (a step's own env is not visible there). Sign only with the
+      # full client-secret credential: the org shares the ID without the secret, which fails auth.
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET_SET: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
     steps:
       - name: Alpine prerequisites
         if: matrix.container
@@ -87,7 +89,7 @@ jobs:
       # (PSF-signed); everything stage listed as unsigned is signed here with our
       # Azure Artifact Signing certificate profile.
       - name: Sign Windows binaries
-        if: matrix.target == 'win32-x64' && env.AZURE_CLIENT_ID != ''
+        if: matrix.target == 'win32-x64' && env.AZURE_CLIENT_ID != '' && env.AZURE_CLIENT_SECRET_SET == 'true'
         uses: azure/artifact-signing-action@208f8af4bf26cf2af8597424e3cb5582801523ba  # v2.0.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
