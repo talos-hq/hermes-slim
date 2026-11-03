@@ -28,41 +28,58 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s slim/tests -v
 
+  # macOS ARM runners are capacity-limited for PR builds: the job is cancelled ~15 min after
+  # queueing WITHOUT ever starting (runner_name "", steps: [], and this file declares no
+  # `timeout-minutes`), which fails the run for a capacity reason no code change can fix.
+  # Measured 2026-11-03: main run 41725637224 (15m01s, empty runner), 41725164140 (15m02s),
+  # 41729388188 (15m01s), while the same job takes ~3m22s when a runner is free (41543140935).
+  #
+  # Two fixes that do NOT work, both measured here: `timeout-minutes` cannot reach a job that never
+  # runs, and `continue-on-error` does not neutralise a CANCELLED job (41729388188 still failed).
+  # A job-level `if:` cannot read `matrix` ("context \"matrix\" is not allowed here"), so the leg
+  # list is computed instead: PRs drop darwin-arm64 unless the PR opts in with the
+  # `ci:bundle-macos` label; pushes to main and tag builds always build every leg.
+  legs:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.gen.outputs.include }}
+    steps:
+      - id: gen
+        env:
+          EVENT: ${{ github.event_name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+          import sys
+
+          legs = [
+              {"target": "win32-x64", "os": "windows-latest"},
+              {"target": "darwin-x64", "os": "macos-15-intel"},
+              {"target": "darwin-arm64", "os": "macos-latest"},
+              {"target": "linux-x64", "os": "ubuntu-latest"},
+              {"target": "linux-arm64", "os": "ubuntu-24.04-arm"},
+              {"target": "linux-x64-musl", "os": "ubuntu-latest", "container": "alpine:3.22"},
+          ]
+          labels = os.environ.get("LABELS", "").split(",")
+          wants_arm = os.environ.get("EVENT") != "pull_request" or "ci:bundle-macos" in labels
+          if not wants_arm:
+              legs = [leg for leg in legs if leg["target"] != "darwin-arm64"]
+          with open(sys.argv[1], "a", encoding="utf-8") as out:
+              out.write("include=" + json.dumps(legs) + "\n")
+          print(f"bundle legs: {[leg['target'] for leg in legs]}")
+          PY
+
   bundle:
-    needs: unit
+    needs: [unit, legs]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: win32-x64
-            os: windows-latest
-          - target: darwin-x64
-            os: macos-15-intel
-          - target: darwin-arm64
-            os: macos-latest
-          - target: linux-x64
-            os: ubuntu-latest
-          - target: linux-arm64
-            os: ubuntu-24.04-arm
-          - target: linux-x64-musl
-            os: ubuntu-latest
-            container: alpine:3.22
+        include: ${{ fromJSON(needs.legs.outputs.include) }}
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
-    # darwin-arm64 needs a macOS ARM runner, which the pool frequently cannot supply for PR builds:
-    # the job is cancelled ~15 min after queueing WITHOUT ever starting (runner_name "", steps: [],
-    # no `timeout-minutes` anywhere in this workflow), which fails the run for a capacity reason no
-    # code change can fix. Measured 2026-11-03: main run 41725637224 (15m01s, empty runner), PR run
-    # 41725164140 (15m02s), run 41729388188 (15m01s) — while the same job takes ~3m20s whenever a
-    # runner is free (run 41543140935).
-    #
-    # `continue-on-error` does NOT fix this: a CANCELLED job still fails the run (measured on
-    # 41729388188). So the leg is skipped on pull_request unless the PR carries the
-    # `ci:bundle-macos` label, which is the on-demand escape hatch when macOS-ARM behaviour is what
-    # the PR changes. Pushes to main and tag builds always build it.
-    if: >-
-      matrix.target != 'darwin-arm64' || github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'ci:bundle-macos')
     defaults:
       run:
         shell: bash
