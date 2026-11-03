@@ -49,13 +49,20 @@ jobs:
             container: alpine:3.22
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
-    # macOS ARM runners are capacity-limited: when the pool has none free the job is CANCELLED
-    # after ~15 min WITHOUT ever starting (runner_name empty, steps: []), which fails the whole
-    # run for a reason no code change can fix — and no `timeout-minutes` can reach, because the
-    # job never executes a step. Observed 2026-11-03 on main (run 41725637224) as well as on PRs,
-    # while the same job takes ~3m20s when a runner is available (run 41543140935).
-    # PRs therefore treat this one leg as non-blocking; main pushes and tags stay strict.
-    continue-on-error: ${{ github.event_name == 'pull_request' && matrix.target == 'darwin-arm64' }}
+    # darwin-arm64 needs a macOS ARM runner, which the pool frequently cannot supply for PR builds:
+    # the job is cancelled ~15 min after queueing WITHOUT ever starting (runner_name "", steps: [],
+    # no `timeout-minutes` anywhere in this workflow), which fails the run for a capacity reason no
+    # code change can fix. Measured 2026-11-03: main run 41725637224 (15m01s, empty runner), PR run
+    # 41725164140 (15m02s), run 41729388188 (15m01s) — while the same job takes ~3m20s whenever a
+    # runner is free (run 41543140935).
+    #
+    # `continue-on-error` does NOT fix this: a CANCELLED job still fails the run (measured on
+    # 41729388188). So the leg is skipped on pull_request unless the PR carries the
+    # `ci:bundle-macos` label, which is the on-demand escape hatch when macOS-ARM behaviour is what
+    # the PR changes. Pushes to main and tag builds always build it.
+    if: >-
+      matrix.target != 'darwin-arm64' || github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:bundle-macos')
     defaults:
       run:
         shell: bash
