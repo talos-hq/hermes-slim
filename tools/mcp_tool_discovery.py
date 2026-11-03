@@ -774,6 +774,9 @@ def discover_mcp_tools(allowed_mcp_names: Optional[list[str]] = None) -> list[st
     if not servers:
         logger.debug("No MCP servers configured")
         return []
+    if not _core._MCP_AVAILABLE:
+        _warn_missing_sdk(servers)
+        return []
     if allowed_mcp_names is not None:
         allowed_set = {str(n) for n in allowed_mcp_names}
         filtered = {name: cfg for name, cfg in servers.items() if name in allowed_set}

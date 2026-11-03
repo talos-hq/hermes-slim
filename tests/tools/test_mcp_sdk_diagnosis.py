@@ -41,6 +41,8 @@ def test_discovery_warns_once_only_with_servers(monkeypatch, caplog):
         monkeypatch.setattr(
             discovery._config, "_load_mcp_config", lambda: {"demo": {"command": "demo"}}
         )
+        discovery.discover_mcp_tools(allowed_mcp_names=[])
+        assert len(caplog.records) == 1
         discovery.discover_mcp_tools()
         discovery.register_mcp_servers({"demo": {"command": "demo"}})
         discovery.discover_mcp_tools()
