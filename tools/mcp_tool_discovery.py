@@ -685,6 +685,14 @@ def reconcile_mcp_servers_with_config() -> dict[str, list[str]]:
     for key in lazy:
         _forget_lazy_server(key)
     added = _awaiting_connect(wanted, scope)
+    if added and not _core._ensure_mcp_sdk():
+        # Discovery returns before connecting when this process's selected environment lacks
+        # the SDK. Treat that as a failure too, or every tick falsely reports an addition.
+        message = "MCP SDK unavailable in this process; install the mcp extra and restart when idle"
+        for name in added:
+            _note_connect_failure(name, RuntimeError(message))
+        logger.warning("MCP server(s) %s: %s", ", ".join(added), message)
+        added = []
     if added:
         discover_mcp_tools()
     return {"removed": stale + sorted(_key_name(k) for k in lazy), "added": added,
