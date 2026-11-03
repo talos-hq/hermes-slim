@@ -49,6 +49,13 @@ jobs:
             container: alpine:3.22
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
+    # macOS ARM runners are capacity-limited: when the pool has none free the job is CANCELLED
+    # after ~15 min WITHOUT ever starting (runner_name empty, steps: []), which fails the whole
+    # run for a reason no code change can fix — and no `timeout-minutes` can reach, because the
+    # job never executes a step. Observed 2026-11-03 on main (run 41725637224) as well as on PRs,
+    # while the same job takes ~3m20s when a runner is available (run 41543140935).
+    # PRs therefore treat this one leg as non-blocking; main pushes and tags stay strict.
+    continue-on-error: ${{ github.event_name == 'pull_request' && matrix.target == 'darwin-arm64' }}
     defaults:
       run:
         shell: bash
