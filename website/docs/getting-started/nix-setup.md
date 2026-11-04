@@ -948,15 +948,13 @@ hermes setup
 hermes chat
 ```
 
-### direnv (Recommended)
+### Explicit activation
 
-The included `.envrc` activates the dev shell automatically:
-
-```bash
-cd hermes-agent
-direnv allow    # one-time
-# Nix reuses its built Python environment; the npm hook checks JS inputs.
-```
+The repository does not include an `.envrc`. Entering the checkout leaves your
+host toolset unchanged, so development commands can expose missing dependencies
+or NixOS compatibility problems in your normal environment. Run `nix develop`
+explicitly when you want the pinned development shell, and `exit` to return to
+your host environment.
 
 ### Flake Checks
 
