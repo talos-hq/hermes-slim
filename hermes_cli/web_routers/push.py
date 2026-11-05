@@ -14,7 +14,7 @@ from gateway.push_delivery import PushSdkMissing, PushSettings, deliver
 from gateway.push_store import PushStore
 from hermes_cli.web_routers.webapp import _ticket_principal
 
-router = APIRouter(prefix='/api/push')
+router = APIRouter()
 
 
 class SubscriptionKeys(BaseModel):
@@ -113,9 +113,12 @@ async def write_mailbox(request: Request, body: MailboxMessage):
         raise HTTPException(403, 'Mailbox recipient must match the authenticated user')
     with _store() as store:
         try:
-            admitted = store.admit(owner, body.message_id, body.session_id, body.message)
-        except ValueError:
-            raise HTTPException(409, 'Message id already used for different content') from None
+            admitted = store.admit(owner, body.message_id, body.session_id, body.message,
+                                   key=request.headers.get('Idempotency-Key'),
+                                   body=json.dumps(await request.json(), sort_keys=True, separators=(',', ':')))
+        except ValueError as error:
+            code = 'idempotency_conflict' if str(error) == 'idempotency_conflict' else 'message_conflict'
+            raise HTTPException(409, {'code': code, 'message': 'Key or message id already used for different content'}) from None
         if admitted:
             # Delivery failure cannot roll back or invalidate the committed mailbox receipt.
             try:
@@ -126,11 +129,13 @@ async def write_mailbox(request: Request, body: MailboxMessage):
 
 
 @router.get('/mailbox')
-def mailbox(request: Request, after: int = Query(default=0, ge=0)):
+def mailbox(request: Request, after: int = Query(default=0, ge=0),
+            limit: int = Query(default=50, ge=1, le=200)):
     owner, _user = _owner(request)
     with _store() as store:
-        messages = store.mailbox(owner, after)
-    return JSONResponse({'messages': messages, 'next_cursor': messages[-1]['sequence'] if messages else after},
+        rows = store.mailbox(owner, after, limit + 1)
+        messages = rows[:limit]
+    return JSONResponse({'messages': messages, 'has_more': len(rows) > limit, 'next_cursor': messages[-1]['sequence'] if messages else after},
                         headers={'Cache-Control': 'no-store'})
 
 
@@ -142,3 +147,35 @@ def mark_read(request: Request, message_id: str):
     if not found:
         raise HTTPException(404, 'Message not found')
     return {'read': True}
+
+
+@router.get('/mailbox/{message_id}')
+def message(request: Request, message_id: str):
+    owner, _user = _owner(request)
+    with _store() as store:
+        record = store.message(owner, message_id)
+    if record is None:
+        raise HTTPException(404, {'code': 'message_not_found', 'message': 'Message not found'})
+    return JSONResponse(record, headers={'Cache-Control': 'no-store'})
+
+
+class LegacyPushHeaders:
+    """Wrap the full app so even authentication and validation errors advertise v1."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get('path', '')
+        legacy = (path == '/api/push' or path.startswith('/api/push/')) and not (
+            path == '/api/push/v1' or path.startswith('/api/push/v1/'))
+
+        async def send_response(message):
+            if message['type'] == 'http.response.start' and legacy:
+                successor = '/api/push/v1' + path[len('/api/push'):]
+                message['headers'] = list(message.get('headers', [])) + [
+                    (b'deprecation', b'true'),
+                    (b'link', f'<{successor}>; rel="successor-version"'.encode())]
+            await send(message)
+
+        await self.app(scope, receive, send_response)

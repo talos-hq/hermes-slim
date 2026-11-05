@@ -254,3 +254,66 @@ def test_expired_generation_cannot_revoke_replacement(tmp_path):
         assert store.subscriptions('other') == []
         store.revoke('other', 'iphone')
         assert store.subscriptions('owner')
+
+
+@pytest.mark.parametrize('prefix', ['/api/push', '/api/push/v1'])
+def test_versioned_mailbox_and_alias_headers(api, prefix):
+    client, _, _ = api
+    for suffix in ['/mailbox', '/mailbox/unknown']:
+        response = client.get(prefix + suffix)
+        assert response.status_code == (200 if suffix == '/mailbox' else 404)
+        if prefix == '/api/push':
+            assert response.headers['Deprecation'] == 'true'
+            assert response.headers['Link'] == f'</api/push/v1{suffix}>; rel="successor-version"'
+        else:
+            assert 'Deprecation' not in response.headers
+
+
+def test_header_idempotency_is_durable_and_owner_scoped(api, monkeypatch):
+    from hermes_cli.web_routers import push
+    client, _, _ = api
+    calls = []
+    async def delivery(*args):
+        calls.append(args[2])
+    monkeypatch.setattr(push, 'deliver', delivery)
+    body = {'message_id': 'keyed', 'session_id': 's', 'message': 'hello'}
+    headers = {'Idempotency-Key': 'retry-key'}
+    first = client.post('/api/push/mailbox', json=body, headers=headers)
+    replay = client.post('/api/push/mailbox', json=body, headers=headers)
+    assert first.json()['created'] is True
+    assert replay.json()['created'] is False
+    conflict = client.post('/api/push/mailbox', json=body | {'message_id': 'new'}, headers=headers)
+    assert conflict.status_code == 409
+    assert conflict.json()['detail']['code'] == 'idempotency_conflict'
+    assert len(client.get('/api/push/mailbox').json()['messages']) == 1
+    assert calls == ['keyed']
+    monkeypatch.setattr(push, '_owner', lambda request: ('other-owner', 'other'))
+    assert client.post('/api/push/mailbox', json=body, headers=headers).json()['created'] is True
+
+
+def test_mailbox_limit_cursor_and_owner_fetch(api, monkeypatch):
+    from hermes_cli.web_routers import push
+    client, _, _ = api
+    for index in range(5):
+        assert _write(client, f'page-{index}').status_code == 200
+    cursor, ids = 0, []
+    for count, more in [(2, True), (2, True), (1, False), (0, False)]:
+        page = client.get('/api/push/mailbox', params={'after': cursor, 'limit': 2}).json()
+        assert len(page['messages']) == count
+        assert page['has_more'] is more
+        ids.extend(row['id'] for row in page['messages'])
+        cursor = page['next_cursor']
+    assert ids == [f'page-{index}' for index in range(5)]
+    exact = client.get('/api/push/mailbox', params={'limit': 5}).json()
+    assert exact['has_more'] is False
+    for limit in [0, 201]:
+        assert client.get('/api/push/mailbox', params={'limit': limit}).status_code == 422
+    own = client.get('/api/push/mailbox/page-0')
+    assert own.status_code == 200
+    assert own.json()['id'] == 'page-0'
+    for owner in [None, 'other-owner']:
+        if owner:
+            monkeypatch.setattr(push, '_owner', lambda request: (owner, 'other'))
+        response = client.get('/api/push/mailbox/' + ('page-0' if owner else 'unknown'))
+        assert response.status_code == 404
+        assert response.json()['detail']['code'] == 'message_not_found'
