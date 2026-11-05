@@ -139,3 +139,81 @@ separate from VAPID signing authority. The connector plugin sends no Web Push it
 - No exactly-once delivery without server-side atomic idempotency enforcement.
 - No implemented watchOS client or durable connector-side outbox.
 - No semantic proof that arbitrary text was never derived from private content.
+
+## Voice, later — designed here, deliberately not built
+
+The pilot ships text only. This section fixes the seams so adding voice does not
+mean rebuilding the transport, the mailbox, or the Hermes integration.
+
+### Message model
+
+The mailbox record gains two fields and one new content kind; nothing else changes:
+
+| field | meaning |
+| --- | --- |
+| `kind` | `text` (today) or `audio` |
+| `audio_ref` | opaque server-side blob reference; never a public URL |
+| `transcript` | `pending` / `ready` / `failed`, plus text when ready |
+| `session_id` | unchanged — the reply must land in the conversation that asked |
+
+A voice reply is a mailbox row with `kind=audio` pointing at a blob. The device
+fetches the blob through the authenticated API, so access control stays the same
+as text and a leaked `audio_ref` is useless on its own.
+
+### Client capture
+
+- `navigator.mediaDevices.getUserMedia({audio:true})` **only** from a user gesture
+  (a tap). Never on load, never from the service worker.
+- Record with `MediaRecorder`, negotiating `mimeType`: Safari offers
+  `audio/mp4`, Chromium `audio/webm;codecs=opus`. Feature-detect with
+  `MediaRecorder.isTypeSupported`, and send the chosen type to the server rather
+  than assuming a container.
+- State machine, explicit and cancellable:
+  `idle → requesting-permission → recording → uploading → transcribing → sent`,
+  with `failed` reachable from every state and `cancel` tearing down the stream
+  in all of them. A stuck `recording` state that keeps the mic light on is a
+  privacy bug, not a UX bug.
+- Upload with an idempotency key so a retry cannot create two messages.
+- Offline: keep the blob locally, show it as `queued`, upload on reconnect.
+
+### Transcription — server-side by default
+
+Do **not** rely on in-browser `SpeechRecognition`. On WebKit it is
+vendor-prefixed, capped around 60 seconds of audio, unreliable after other audio
+playback has run, and unavailable in several contexts; the failure mode is a
+silent empty transcript. Instead:
+
+1. Client uploads the blob: `POST /api/voice` (multipart, authenticated, idempotent).
+2. Server stores the blob, creates the mailbox row with `transcript=pending`, and
+   enqueues transcription.
+3. Transcription runs server-side (a hosted STT provider, or a local model behind
+   the same interface). On success the row becomes `transcript=ready` with text
+   and the original Hermes session receives the reply as a normal user message —
+   identical to the text path, which is the whole point.
+4. On failure the row becomes `transcript=failed`, **the audio is kept**, and the
+   UI offers retry or playback. Losing the recording because the transcriber was
+   down is unacceptable.
+
+The adapter interface is deliberately narrow — `transcribe(blob, mime) -> text` —
+so a local model can replace a hosted provider without touching the mailbox, the
+connector, or the client.
+
+### Text-to-speech
+
+- Synthesise on demand: `GET /api/messages/{id}/audio`, cached by content hash so
+  repeated plays don't re-bill synthesis.
+- **Play is a user-initiated control.** iOS blocks or silently swallows autoplay;
+  treat audible autoplay as an experiment, never as the designed path.
+- Playback uses a single `HTMLAudioElement` with explicit `stop`, so two messages
+  can't talk over each other; `visibilitychange` pauses it.
+- A push payload still carries only an id and a short line. Audio is fetched after
+  the user acts, so a lock screen never holds agent content.
+
+### What voice will still not do
+
+- No microphone from the service worker or from a push wake-up, on any platform.
+- No autoplay of speech on iOS as a guaranteed behaviour.
+- No watch microphone or dictation without a native watchOS companion; a mirrored
+  notification carries no microphone permission and no reply affordance.
+- No background recording; the mic is live only while the user is in a recording
+  state with the app foregrounded.
