@@ -349,6 +349,7 @@ from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.setup import build_setup_parser
+from hermes_cli.subcommands.talos_messaging import build_talos_messaging_parser
 
 from hermes_cli.subcommands.whatsapp import build_whatsapp_parser, build_whatsapp_cloud_parser
 from hermes_cli.subcommands.slack import build_slack_parser
@@ -2179,6 +2180,13 @@ def cmd_config(args):
         sys.exit(1)
 
 
+def cmd_talos_messaging(args):
+    """``hermes talos-messaging``: mint/revoke the key, print the link, write the email page."""
+    from hermes_cli import talos_messaging
+
+    return talos_messaging.run(args)
+
+
 def cmd_backup(args):
     """Back up Hermes home directory to a zip file."""
     from hermes_cli import backup
@@ -3314,6 +3322,7 @@ def _build_cli_parser():
         logger.debug("LSP CLI registration failed: %s", _lsp_err)
 
     build_setup_parser(subparsers, cmd_setup=cmd_setup)
+    build_talos_messaging_parser(subparsers, cmd=cmd_talos_messaging)
     build_whatsapp_parser(subparsers, cmd_whatsapp=cmd_whatsapp)
     build_whatsapp_cloud_parser(subparsers, cmd_whatsapp_cloud=cmd_whatsapp_cloud)
     build_slack_parser(subparsers, cmd_slack=cmd_slack)

@@ -1,0 +1,68 @@
+/* Talos palette: obsidian ground, bronze hairlines, gold for what is live. */
+:root {
+  --obsidian: #0b0d10;
+  --bronze: #c89b63;
+  --gold: #e4c89a;
+  --sand: #ede6d9;
+  --stone: #6b6f75;
+  --panel: #10141a;
+  color-scheme: dark;
+  font-family: -apple-system, system-ui, 'Segoe UI', sans-serif;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; background: var(--obsidian); color: var(--sand); }
+.app { display: flex; flex-direction: column; height: 100%; max-width: 720px; margin: 0 auto; }
+.bar {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+  padding-top: calc(14px + env(safe-area-inset-top));
+  border-bottom: 1px solid #514435; background: #0d1014; position: sticky; top: 0; z-index: 2;
+}
+.bar .who { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.bar strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar small { color: var(--stone); font-size: 11px; font-variant-numeric: tabular-nums; }
+.icon { width: 34px; height: 34px; border-radius: 50%; border: 1px solid #514435; background: transparent; color: var(--gold); font-size: 18px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--stone); }
+.dot.ready { background: #5e8c61; box-shadow: 0 0 10px #5e8c6180; }
+.dot.denied { background: #b4472f; }
+.threads { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; }
+.threads .empty { color: var(--stone); padding: 40px 20px; text-align: center; }
+.thread {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 14px 16px; background: transparent; border: 0; border-bottom: 1px solid #1c2128; color: inherit;
+}
+.thread:active { background: #16191e; }
+.avatar { width: 44px; height: 44px; border-radius: 50%; flex: none; border: 1px solid var(--bronze); background: radial-gradient(circle at 35% 30%, #2a241c, #10141a); }
+.meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.meta strong { font-weight: 500; }
+.meta small, time { color: var(--stone); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.messages { list-style: none; margin: 0; padding: 16px; display: flex; flex-direction: column; gap: 8px; overflow: auto; flex: 1; }
+.messages li { max-width: 82%; }
+.messages li p { margin: 0; padding: 9px 13px; border-radius: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.messages li.user { align-self: flex-end; }
+.messages li.user p { background: #24333f; border-bottom-right-radius: 5px; }
+.messages li.agent { align-self: flex-start; }
+.messages li.agent p { background: var(--panel); border: 1px solid #2a2f36; border-bottom-left-radius: 5px; }
+.composer {
+  display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid #514435; background: #0d1014;
+}
+.composer textarea {
+  flex: 1; resize: none; max-height: 120px; padding: 11px 14px; border-radius: 18px;
+  border: 1px solid #2a2f36; background: var(--panel); color: var(--sand); font: inherit;
+}
+.composer button {
+  width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--bronze); color: #0b0d10; font-size: 18px;
+}
+.composer button:disabled { opacity: 0.45; }
+.banner { margin: 0; padding: 10px 16px; background: #1a1210; color: #ffab94; font-size: 13px; }
+.banner code { color: var(--gold); }
+.boot { padding: 48px 24px; }
+.boot h1 { font-size: 30px; margin: 0 0 10px; }
+.boot p { color: var(--stone); line-height: 1.6; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+.notifications, .mailbox { padding: 8px 16px; font-size: 13px; }
+.notifications p:empty, .mailbox:empty { display: none; }
+.notifications button { background: var(--panel); color: var(--gold); border: 1px solid var(--bronze); padding: 8px 12px; border-radius: 8px; }
+.notifications button:disabled { opacity: .5; }
+.mailbox { max-height: 25vh; overflow: auto; overflow-wrap: anywhere; }

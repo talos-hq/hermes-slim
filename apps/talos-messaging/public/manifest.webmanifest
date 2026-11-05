@@ -1,0 +1,16 @@
+{
+  "name": "Talos Messaging",
+  "short_name": "Talos",
+  "description": "Chat with this machine's hermes agents.",
+  "start_url": "/talos/",
+  "scope": "/talos/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B0D10",
+  "theme_color": "#0B0D10",
+  "icons": [
+    { "src": "/talos/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/talos/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/talos/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

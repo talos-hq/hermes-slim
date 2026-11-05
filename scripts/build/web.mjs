@@ -154,6 +154,16 @@ if (isMain(import.meta.url)) {
       : frontendArgs(process.argv.slice(2), { icons: { type: 'string' } })
     const result = await buildWeb(options)
     console.log(`built ${result.index}`)
+    // The phone PWA rides the same build: /talos serves apps/talos-messaging/dist.
+    // A failure here must not fail the dashboard build — the app answers 404 with
+    // the reason until someone builds it — so it warns and moves on.
+    try {
+      const { buildTalosMessaging } = await import('./talos-messaging.mjs')
+      const phone = await buildTalosMessaging({ source: options.source })
+      console.log(`built ${phone.index}`)
+    } catch (error) {
+      console.warn(`talos-messaging: skipped (${error instanceof Error ? error.message : error})`)
+    }
   } catch (error) {
     console.error(error)
     process.exitCode = 1
