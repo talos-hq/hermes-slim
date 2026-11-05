@@ -184,6 +184,8 @@ except AttributeError:
 # open a real DB must export HERMES_STATE_DB_GUARD_BYPASS=1 in that child's
 # env instead of stripping markers.
 os.environ["HERMES_TEST_ISOLATION"] = os.environ.get("HERMES_HOME", "") or "1"
+# brain is shared outside profile homes, and searches update its hit counters.
+os.environ["HERMES_BRAIN_DIR"] = str(Path(os.environ["HERMES_HOME"]) / "brain")
 
 # Lazy-install kill-switch, set before any test module is imported. The per-test
 # fixture below sets it too, but collection runs first: agent/bedrock_adapter.py
@@ -309,6 +311,7 @@ def _hermetic_environment(tmp_path, tmp_path_factory, monkeypatch):
     (fake_hermes_home / "memories").mkdir()
     (fake_hermes_home / "skills").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(fake_hermes_home))
+    monkeypatch.setenv("HERMES_BRAIN_DIR", str(tmp_path / "brain"))
     # A test that pins the process home (hermes_constants.pin_process_hermes_home) must not
     # leak that module-global into the next test's routed-profile decisions.
     try:
