@@ -107,6 +107,73 @@ A crash after the mailbox commit can lose a wake-up. An uncertain network respon
 duplicate delivery at the push provider within the retry budget; Web Push has no exactly-once
 receipt. The durable mailbox remains authoritative and no replay starts another delivery batch.
 
+### Errors and diagnostics (v1 and deprecated alias)
+
+Every error has exactly `{ "code": "stable_snake_case", "message": "Human sentence" }`,
+with the existing HTTP status preserved. Clients branch on `code`, never prose.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `bad_request` | Malformed request rejected by the gateway |
+| 401 | `unauthenticated` | Missing, invalid or revoked credential |
+| 403 | `insufficient_scope` | Credential cannot perform this operation |
+| 403 | `recipient_mismatch` | Recipient differs from the authenticated owner |
+| 404 | `message_not_found` | Message absent in this owner's mailbox |
+| 405 | `method_not_allowed` | Unsupported HTTP method |
+| 409 | `idempotency_conflict` | Idempotency key reused with different content |
+| 409 | `message_conflict` | Message ID reused with different content |
+| 422 | `validation_error` | Invalid body, query or subscription |
+| 429 | `rate_limited` | Owner or IP bucket exhausted; retain `Retry-After` |
+| 503 | `push_unconfigured` | Missing or invalid server push configuration |
+| 503 | `push_extras_missing` | Optional Web Push SDK unavailable |
+| Other | `internal_error` | Unexpected server failure; no provider details exposed |
+
+`GET /api/push/v1/status` requires the same owner authentication and returns
+`Cache-Control: no-store`. Example:
+
+```json
+{
+  "subscriptions": 0,
+  "last_delivery": {"attempted_at": "2026-11-05T12:00:00+00:00", "result": "failed"},
+  "last_revocation": {"at": "2026-11-05T12:00:00+00:00", "reason": "410"},
+  "counters": {"sent": 1, "failed": 2, "revoked": 1}
+}
+```
+
+New owners see zero counters and null events. No endpoint URLs or provider error text
+are returned or logged. `push_diagnostics` in the existing profile `state.db` persists
+owner-keyed counters and last-event timestamps across reopen/restart. Each network attempt
+counts once: 2xx increments `sent`; all other responses and transport/signing failures increment
+`failed`, including retries. Disabled push makes no attempt and increments neither.
+`revoked` counts actual 404/410-driven removals, guarded against stale subscription generations;
+manual unsubscribe does not increment it. A crash between a network result and its database
+write can lose that attempt's accounting; these counters are diagnostics, not delivery receipts.
+
+### OpenAPI contract snapshot
+
+`tests/fixtures/push_v1_openapi.json` pins the generated schema for the v1 router,
+including request, success and error fields. `test_push_v1_openapi_snapshot` compares it
+exactly and prints changed JSON property paths plus a unified diff. A separate test
+renames a generated property in memory and verifies the failure explains both names.
+To intentionally update the contract after reviewing compatibility, run:
+
+```bash
+python -m tests.hermes_cli.test_push_openapi --update
+```
+
+Review and commit the snapshot diff alongside the API change. Normal test runs never
+rewrite the snapshot.
+
+### Plaintext at rest
+
+Mailbox rows are stored **plaintext** in the local `state.db`. The gateway is a
+single-user local service: disk access means message access, including database backups.
+Web Push transport encryption does not encrypt mailbox storage. Protect the local account,
+file permissions, backups and disk (for example with full-disk encryption).
+A future multi-tenant deployment requires explicit tenant isolation and authorization,
+encryption at rest with separately managed tenant keys and rotation, protected backups,
+and an audited retention/deletion policy before it can claim tenant confidentiality.
+
 ## Mailbox, push and device boundary
 
 The authenticated mailbox is authoritative. A mailbox write may cause the server to

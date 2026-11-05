@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+from datetime import UTC, datetime
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -92,9 +93,16 @@ async def deliver(store, owner, message_id, settings, *, backoff=0.25):
     payload = json.dumps({'message_id': message_id})
     for device_id, subscription in store.subscriptions(owner):
         for attempt in range(3):
-            status = await asyncio.to_thread(_send_once, subscription, payload, settings)
+            attempted_at = datetime.now(UTC).isoformat()
+            try:
+                status = await asyncio.to_thread(_send_once, subscription, payload, settings)
+            except (ValueError, TypeError):
+                store.record_delivery(owner, attempted_at, 'failed')
+                raise
+            store.record_delivery(owner, attempted_at,
+                                  'sent' if status is not None and 200 <= status < 300 else 'failed')
             if status in (404, 410):
-                store.revoke(owner, device_id, subscription)
+                store.revoke(owner, device_id, subscription, reason=str(status))
                 break
             if status is not None and status != 429 and not 500 <= status < 600:
                 break

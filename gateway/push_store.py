@@ -21,6 +21,10 @@ class PushStore:
             conn.execute("""CREATE TABLE IF NOT EXISTS push_idempotency (
                 owner TEXT NOT NULL, key TEXT NOT NULL, body TEXT NOT NULL,
                 PRIMARY KEY (owner, key))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS push_diagnostics (
+                owner TEXT PRIMARY KEY, sent INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0,
+                attempted_at TEXT, result TEXT, revoked_at TEXT, reason TEXT)""")
         db._execute_write(initialize)
 
     def register(self, owner, device_id, subscription):
@@ -28,14 +32,22 @@ class PushStore:
             ON CONFLICT(owner, device_id) DO UPDATE SET subscription=excluded.subscription""",
             (owner, device_id, json.dumps(subscription, sort_keys=True)))
 
-    def revoke(self, owner, device_id, subscription=None):
+    def revoke(self, owner, device_id, subscription=None, *, reason=None):
         # A late 410 for an old endpoint must not revoke a replacement subscription.
         sql = "DELETE FROM push_subscriptions WHERE owner=? AND device_id=?"
         params = (owner, device_id)
         if subscription is not None:
             sql += " AND subscription=?"
             params += (json.dumps(subscription, sort_keys=True),)
-        self.db._write_sql(sql, params)
+        def remove(conn):
+            removed = conn.execute(sql, params).rowcount
+            if removed and reason is not None:
+                now = datetime.now(UTC).isoformat()
+                conn.execute("""INSERT INTO push_diagnostics (owner, revoked, revoked_at, reason)
+                    VALUES (?, 1, ?, ?) ON CONFLICT(owner) DO UPDATE SET
+                    revoked=revoked+1, revoked_at=excluded.revoked_at, reason=excluded.reason""",
+                    (owner, now, reason))
+        self.db._execute_write(remove)
 
     def subscriptions(self, owner):
         return [(row['device_id'], json.loads(row['subscription'])) for row in
@@ -81,3 +93,27 @@ class PushStore:
         rows = self.db._read_all("""SELECT sequence, id, timestamp, session_id, message, read
             FROM push_mailbox WHERE owner=? AND id=?""", (owner, message_id))
         return dict(rows[0]) | {'read': bool(rows[0]['read'])} if rows else None
+
+    def record_delivery(self, owner, attempted_at, result):
+        """Count each network attempt, including retries; retain no provider content."""
+        sent = int(result == 'sent')
+        self.db._write_sql("""INSERT INTO push_diagnostics
+            (owner, sent, failed, attempted_at, result) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(owner) DO UPDATE SET sent=sent+excluded.sent,
+            failed=failed+excluded.failed,
+            attempted_at=MAX(COALESCE(attempted_at, excluded.attempted_at), excluded.attempted_at),
+            result=CASE WHEN attempted_at IS NULL OR excluded.attempted_at >= attempted_at
+                THEN excluded.result ELSE result END""",
+            (owner, sent, 1 - sent, attempted_at, result))
+
+    def status(self, owner):
+        rows = self.db._read_all("SELECT * FROM push_diagnostics WHERE owner=?", (owner,))
+        row = dict(rows[0]) if rows else {}
+        count = self.db._read_all(
+            "SELECT COUNT(*) AS total FROM push_subscriptions WHERE owner=?", (owner,))[0]['total']
+        return {'subscriptions': count,
+                'last_delivery': {'attempted_at': row['attempted_at'], 'result': row['result']}
+                    if row.get('attempted_at') else None,
+                'last_revocation': {'at': row['revoked_at'], 'reason': row['reason']}
+                    if row.get('revoked_at') else None,
+                'counters': {key: row.get(key, 0) for key in ('sent', 'failed', 'revoked')}}
