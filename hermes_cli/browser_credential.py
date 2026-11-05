@@ -66,12 +66,27 @@ def on_rotate(name: str, revoker: Callable[[], int]) -> None:
         _revokers[name] = revoker
 
 
-def rotate(credential: str) -> dict[str, int]:
+def rotate(credential: str, *, home=None) -> dict[str, int]:
     """Make *credential* the browser credential and end every grant made under the one it replaces.
-    Returns how many grants each registered revoker ended, by name. Safe from any thread."""
+    Bind revokers to *home* when supplied. Return counts by name. Safe from any thread."""
     from hermes_cli import web_server
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
 
     web_server._SESSION_TOKEN = credential
     with _lock:
         revokers = dict(_revokers)
-    return {name: revoker() for name, revoker in revokers.items()}
+    scope = set_hermes_home_override(home) if home is not None else None
+    try:
+        return {name: revoker() for name, revoker in revokers.items()}
+    finally:
+        if scope is not None:
+            reset_hermes_home_override(scope)
+
+
+def _revoke_connectors():
+    # Offline sign-out also reaches this hook, before any push router has been loaded.
+    from hermes_cli.connector_tokens import revoke_all
+    return revoke_all()
+
+
+on_rotate('talos-connectors', _revoke_connectors)

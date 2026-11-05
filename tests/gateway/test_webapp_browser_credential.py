@@ -92,7 +92,7 @@ def test_a_credential_that_cannot_be_stored_names_its_file(tmp_path, block):
     {"state": "off", "url": None, "reason": None},
     {"state": "unavailable", "url": None, "reason": "could not listen on 127.0.0.1:9120 (in use)"},
 ])
-def test_signing_out_of_a_gateway_not_serving_the_webapp_replaces_the_stored_credential(tmp_path, status):
+def test_signing_out_of_a_gateway_not_serving_the_webapp_replaces_the_stored_credential(tmp_path, status, monkeypatch):
     """No browser reaches that gateway's Webapp, so replacing the stored credential is the whole
     sign-out; it says so instead of claiming it closed anything."""
     import json
@@ -100,6 +100,9 @@ def test_signing_out_of_a_gateway_not_serving_the_webapp_replaces_the_stored_cre
 
     from gateway.control_socket import GatewayControlServer
 
+    from hermes_cli import connector_tokens
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    record, token = connector_tokens.create('offline agent', ['mailbox:write'])
     before = webapp.browser_session_token(tmp_path)
     runner = SimpleNamespace(session_control_server=GatewayControlServer(tmp_path), webapp_status=status,
                              session_api=SimpleNamespace(app=SimpleNamespace(web=None)))
@@ -109,3 +112,5 @@ def test_signing_out_of_a_gateway_not_serving_the_webapp_replaces_the_stored_cre
     assert answer["ok"], answer
     assert answer["result"] == {"signed_out": True, "serving": False, "sign_in_gate": False, "connections_closed": 0}
     assert webapp.browser_session_token(tmp_path) != before
+    assert connector_tokens.authenticate(token) is None
+    assert next(row for row in connector_tokens.list_tokens() if row['id'] == record['id'])['revoked_at']

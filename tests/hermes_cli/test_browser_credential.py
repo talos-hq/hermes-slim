@@ -40,3 +40,22 @@ def test_rotate_replaces_the_credential_then_runs_every_revoker(monkeypatch):
     assert browser_credential.rotate("b" * 43) == {"sockets": 2, "file tickets": 0}
     assert web_server._SESSION_TOKEN == browser_credential.current() == "b" * 43
     assert seen == [False, False]
+
+
+def test_rotation_revokes_only_the_explicit_installation(tmp_path, monkeypatch):
+    import hermes_state
+    from hermes_cli import connector_tokens
+    # Use the production profile resolver rather than conftest's single-DB override.
+    monkeypatch.setattr(hermes_state, 'DEFAULT_DB_PATH', hermes_state._IMPORT_DEFAULT_DB_PATH)
+    first = tmp_path / 'first'
+    second = tmp_path / 'second'
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.setenv('HERMES_HOME', str(first))
+    _, first_token = connector_tokens.create('first agent', ['mailbox:write'])
+    monkeypatch.setenv('HERMES_HOME', str(second))
+    _, second_token = connector_tokens.create('second agent', ['mailbox:write'])
+    browser_credential.rotate('replacement', home=first)
+    assert connector_tokens.authenticate(second_token) is not None
+    monkeypatch.setenv('HERMES_HOME', str(first))
+    assert connector_tokens.authenticate(first_token) is None

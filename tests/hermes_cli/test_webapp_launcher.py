@@ -312,12 +312,16 @@ def test_a_gateway_that_will_not_start_is_reported(world, capsys):
 
 def test_signing_out_with_no_gateway_running_still_replaces_the_stored_credential(world, capsys):
     from gateway.webapp_listener import TOKEN_PATH, browser_session_token
+    from hermes_cli import connector_tokens
+    record, token = connector_tokens.create('offline agent', ['mailbox:write'])
     before = browser_session_token(world["root"])
     world["answers"]["webapp-sign-out"] = launcher.GatewayUnreachable("no gateway")
     assert launcher.cmd_webapp(_args(sign_out=True)) == 0
     assert (world["root"] / TOKEN_PATH).read_text().strip() != before
     out = capsys.readouterr().out
     assert "No gateway is running" in out and "sign in again" in out
+    assert connector_tokens.authenticate(token) is None
+    assert next(row for row in connector_tokens.list_tokens() if row['id'] == record['id'])['revoked_at']
 
 
 def test_signing_out_with_no_gateway_and_a_credential_that_cannot_be_stored_says_nobody_was(world, capsys):

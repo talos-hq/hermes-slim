@@ -17,7 +17,7 @@ def build_talos_messaging_parser(subparsers, *, cmd: Callable) -> None:
         "link that carries it, and can write a self-contained instructions page with "
         "pictures to send to the phone.")
     parser.add_argument(
-        "command", nargs="?", choices=["serve"], default=None,
+        "command", nargs="?", choices=["serve", "connector-token"], default=None,
         help="`serve`: carry the phone's chat through the network from this machine "
              "(dials the public relay as the agent)",
     )
@@ -42,4 +42,8 @@ def build_talos_messaging_parser(subparsers, *, cmd: Callable) -> None:
         "--url", default=None,
         help="Base URL the app is served at (default: webapp.public_url, else "
              "http://127.0.0.1:9120)")
+    parser.add_argument('connector_action', nargs='?', choices=['create', 'revoke', 'list'])
+    parser.add_argument('--name', default='connector', help='Connector label')
+    parser.add_argument('--scope', action='append', choices=['mailbox:write', 'subscribe:write'])
+    parser.add_argument('--token-id', help='Token id to revoke')
     parser.set_defaults(func=cmd)

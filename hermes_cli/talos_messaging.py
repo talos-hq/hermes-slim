@@ -49,7 +49,7 @@ def read_token(home: Path) -> str | None:
     """The stored key, or None when there is none or it is malformed."""
     path = token_path(home)
     try:
-        value = path.read_text().strip()
+        value = path.read_text(encoding="utf-8-sig").strip()
     except (FileNotFoundError, NotADirectoryError, PermissionError):
         return None
     if len(value) != TOKEN_LENGTH or not all(char.isalnum() or char in "-_" for char in value):
@@ -255,6 +255,9 @@ def run(args) -> int:
     """``hermes talos-messaging``: mint, print, email, or revoke."""
     from hermes_cli.config import get_hermes_home
 
+    if getattr(args, 'command', None) == 'connector-token':
+        from hermes_cli.connector_tokens import run as run_connector
+        return run_connector(args)
     home = get_hermes_home()
     if getattr(args, "command", None) == "serve":
         return _serve(home, args)
