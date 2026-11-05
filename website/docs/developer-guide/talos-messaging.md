@@ -61,6 +61,28 @@ ticket and passes that on the WebSocket URL. That is the same gate
 `_ws_auth_ok` already enforces, so Talos Messaging needs no new auth path and
 gains nothing a dashboard tab does not already have.
 
+## Reaching a machine behind a NAT: the signaling relay
+
+A phone on cellular cannot dial the agent's gateway: neither side has a routable
+address. Talos Messaging therefore pairs over a WebRTC data channel, and the
+**signaling relay** only introduces the two ends — it forwards SDP and ICE
+between one agent socket and one phone socket and then steps out of the way.
+
+- The relay lives at `https://clud.bot/talos-messaging/signal/{room}?role=agent|phone`
+  (`clud.bot` is the public, WebSocket-capable host this project runs).
+  `talosbot.ai` is GitHub Pages — static, `POST` answers 405 and a WebSocket
+  upgrade is ignored — so the socket cannot terminate there; the static site
+  publishes `https://talosbot.ai/talos-messaging/signal.json` naming the
+  endpoint, and the app reads its endpoint from that document.
+- The room is `sha256(install_key)[:32]`, so dialing the room proves knowing the
+  key and the URL carries no credential of its own. The relay never sees the key.
+- Frames are opaque and capped at 32 KiB; nothing is parsed, logged or stored; a
+  room is reaped when both sides leave or after 300 idle seconds.
+- The agent side dials the relay from `hermes talos-messaging serve` (the same
+  key the install link carries), answers the offer, and exposes the gateway's
+  JSON-RPC over the data channel — so the phone's transport stays
+  `MessagingTransport`, with a WebRTC socket factory in place of `WebSocket`.
+
 ## The key and the install link
 
 `hermes talos-messaging` (alias `hermes messaging`) is the command that puts the
