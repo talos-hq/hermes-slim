@@ -1102,6 +1102,9 @@ async def reveal_env_var(
     """
     _require_token(request)
 
+    if body.key == "TALOS_VAPID_PRIVATE_KEY":
+        raise HTTPException(status_code=403, detail="Server-only key cannot be revealed")
+
     now = time.time()
     cutoff = now - _REVEAL_WINDOW_SECONDS
     _reveal_timestamps[:] = [t for t in _reveal_timestamps if t > cutoff]

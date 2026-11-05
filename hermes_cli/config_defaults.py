@@ -983,6 +983,7 @@ DEFAULT_CONFIG = {
             "unicode_cols": 0,  # Hard override for terminal column width; 0 = derive from scale.
         },
     },
+    "push": {"subject": ""},  # gateway/push_delivery.py; VAPID key lives in the secret store
     "webapp": {"enabled": False, "host": "127.0.0.1", "port": 9120, "public_url": ""},  # gateway/webapp_listener.py
     "dashboard": {
         # Visual theme: "default" | "midnight" | "ember" | "mono" | "cyberpunk" | "rose"
@@ -2711,14 +2712,13 @@ DEFAULT_CONFIG = {
     "_config_version": 52,  # Config schema version - bump this when adding new required fields
 }
 
-
 from hermes_cli.config_defaults_env import OptionalEnvVars, _base_url, _env, _msg, _prov, _setting, _skill, _tool
-
 
 # Optional environment variables that enhance functionality. Feeds the dashboard keys page and setup
 # checklists; category: provider|tool|skill|messaging|setting, advanced=True hides from checklists,
 # tools=[...] lists the model tools the key unlocks. Provider entries: config_provider_env (on first read).
 OPTIONAL_ENV_VARS = OptionalEnvVars({
+    "TALOS_VAPID_PRIVATE_KEY": _msg("Server-side encoded VAPID private key for Talos Web Push", "VAPID private key", password=True),
     # ── Provider (handled in provider selection, not shown in checklists) ──
     "NOUS_BASE_URL": _base_url("Nous Portal"),
     "HERMES_ANON_API_SECRET": _env(
