@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from gateway.push_delivery import PushSettings, deliver
+from gateway.push_delivery import PushSdkMissing, PushSettings, deliver
 from gateway.push_store import PushStore
 from hermes_cli.web_routers.webapp import _ticket_principal
 
@@ -95,6 +95,12 @@ def public_key(request: Request):
         raise HTTPException(503, 'Push is not configured')
     try:
         key = settings.public_key()
+    except PushSdkMissing:
+        raise HTTPException(
+            503,
+            'Web Push extras are not installed; install the optional push dependencies to enable '
+            'notification delivery. The mailbox keeps working without them.',
+        ) from None
     except (ValueError, TypeError):
         raise HTTPException(503, 'Push is not configured') from None
     return JSONResponse({'public_key': key}, headers={'Cache-Control': 'no-store'})
