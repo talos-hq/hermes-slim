@@ -107,6 +107,8 @@ def _resolve_child_toolsets(
         child_toolsets = parent_enabled
     else:
         child_toolsets = sorted(parent_toolsets) or DEFAULT_TOOLSETS
+    if "brain" in _expand_parent_toolsets(parent_toolsets) and "brain" not in child_toolsets:
+        child_toolsets = [*child_toolsets, "brain"]
     child_toolsets = _strip_blocked_tools(child_toolsets)
 
     raw_parent_disabled = getattr(parent_agent, "disabled_toolsets", None)
