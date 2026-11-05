@@ -18,7 +18,7 @@ _HERMES_CORE_TOOLS = [
     "browser_cdp", "browser_dialog",
     "browser_vault",  # rides with the browser; deferred by default (tools.tool_search.defer)
     "text_to_speech",
-    "todo_list", "memory",
+    "todo_list", "memory", "brain_add",
     "session_search",
     "clarify",
     "execute_code", "delegate_task",
@@ -70,6 +70,7 @@ CLIENT_SURFACE_TOOLSETS = frozenset({"project", "desktop_ui", "catalog"})
 # Core toolset definitions: individual tools or references to other toolsets.
 TOOLSETS = {
     # Basic toolsets - individual tool categories
+    "brain": _ts("Append bounded lessons to the shared brain CLI", ["brain_add"]),
     "web": _ts("Web research and content extraction tools", ["web_search", "web_extract"]),
     "search": _ts("Web search only (no content extraction/scraping)", ["web_search"]),
     "x_search": _ts(

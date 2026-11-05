@@ -32,10 +32,30 @@ Sharing across profiles is intentional here: do not put private profile data int
 
 ## Capture an explicit outcome
 
-Agents with terminal access, including delegated agents, receive capture guidance even
-when search returns no matches. They can run `brain add --kind fact --scope repo:NAME --
-'Reusable discovery'`. The exclusion of the built-in `memory` tool for children remains:
-that tool writes profile-local `MEMORY.md`, not the brain.
+When the CLI is installed and `shared_brain.enabled` is true (the default), main and
+delegated agents can call `brain_add(kind, scope, text)`. It invokes the existing `brain add`
+CLI with an argument vector, never a shell. Text is capped at 2,048 characters and scope
+at 128; binary values, control codes and invalid Unicode are rejected. The CLI alone owns
+content-hash dedupe and WAL concurrency. A cold-start SQLite lock failure is retried through
+the CLI up to three times, within a five-second total deadline. Other errors are not retried.
+Errors (including a five-second write timeout)
+return a non-fatal tool result. Operators inspect the same entries with `brain search`.
+
+Delegated agents inherit this capability even when a task narrows its other toolsets,
+provided the parent has it enabled. The exclusion of the built-in `memory` tool for children
+remains: that tool writes curated profile-local `MEMORY.md`, not the brain. Terminal callers
+can still use `brain add --kind fact --scope repo:NAME -- 'Reusable discovery'`.
+
+Every delegation completion, including background and lifecycle API calls, also reuses
+`agent.shared_brain.record_outcome`. A failed task with a known error/failure reason records
+`kind=failure`. A completed task records `kind=solution` when its summary contains a compact
+`Solution:`, `Fix:` or `Verified command:` line identifying a confirmed fix or command. Ordinary `Fixed`/`Resolved` lines that include verification also qualify, as do string
+`solution`, `fix` or `verified_command` fields in schema-validated JSON output. No extra model
+call is made. Generic completion, interruption, budget exhaustion and unknown
+failure causes do not manufacture lessons. Capture uses forced secret redaction, bounds the
+entry, and fails open without changing the child's result. Scope is `repo:<child cwd name>`.
+As with explicit writes, lesson text is untrusted reference data. A running parent's prompt
+stays frozen; a new session's recall snapshot can retrieve the child's entry.
 
 After a confirmed failed command and verified fix, an explicit post-task step can record both:
 
@@ -48,15 +68,16 @@ python -m agent.shared_brain --scope repo:widget \
 Use the Hermes interpreter for this command. Omit `--solution` until the fix is verified.
 The helper invokes `brain add` for each supplied outcome. CLI content-hash dedupe makes
 retries safe, including interruption between the two writes. Store concise patterns and
-confirmed causes, never secrets, raw output or guesses. This is an explicit capture path
-and model guidance, not an automatic classifier of arbitrary terminal output. Whether a
-live model follows that guidance requires a separate live evaluation.
+confirmed causes, never secrets, raw output or guesses. This helper remains an explicit capture path; delegation completion uses the same writer.
+Neither path classifies arbitrary terminal output. Whether a live model reports a verified
+lesson requires a separate live evaluation.
 
 ## Validate and measure
 
 ```bash
-scripts/run_tests.sh tests/agent/test_shared_brain.py
+scripts/run_tests.sh tests/agent/test_shared_brain.py tests/tools/test_brain_add.py
 python scripts/benchmark_shared_brain.py
+python scripts/benchmark_brain_delegation.py --pairs 20
 ```
 
 Use the prepared Hermes test interpreter for the benchmark. Tests require the existing
@@ -70,6 +91,14 @@ scripted model. It reports actual prompt characters, model tool calls and real C
 latency. Model token usage is unavailable. It measures integration overhead and prompt
 growth, not a reduction in live model tool calls or improvement in task success.
 
+The delegation benchmark alternates 20 paired runs through real `AIAgent` and delegation
+lifecycle code, with a scripted API and the real CLI in an isolated brain. Both arms retain
+recall; only automatic capture differs. After warming imports and the database, the measured
+medians were 169.770 ms off and 262.768 ms on; the median paired overhead was **97.512 ms**.
+Baseline median absolute deviation was 13.554 ms: capture was **not below measured noise**
+on this short offline task. These numbers do not measure live model latency or quality.
+[Raw timing receipt](./shared-brain-results/2026-11-05-delegation.json) contains all samples.
+The benchmark prints the same fields for reproduction on the operator's host.
 
 ## Live bounded A/B results (2026-11-05)
 

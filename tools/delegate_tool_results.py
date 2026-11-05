@@ -423,6 +423,9 @@ def _finalize_child_results(
             entry.update(redact_child_result(entry, schema, force=False))
             if isinstance(summary, str) and isinstance(entry.get("summary"), str):
                 entry["summary"] = parent_copy(entry["summary"], forced)
+        from tools.delegate_tool_brain import capture_delegation_outcome
+        for entry in results:
+            capture_delegation_outcome(entry, child_by_index.get(entry.get("task_index")))
         _apply_summary_budget(results, parent_agent)
         _notify_memory_manager(results, task_list, child_by_index, parent_agent)
         _rollup_children_cost(parent_agent, _fire_subagent_stop_hooks(results, child_by_index, parent_agent))
