@@ -865,6 +865,11 @@ _mount_plugin_api_routes()
 from hermes_cli.dashboard_auth.routes import router as _dashboard_auth_router
 
 app.include_router(_dashboard_auth_router)
+# Talos Messaging (the phone PWA) mounts before the dashboard's catch-all, so
+# /talos/... never falls into the desktop SPA.
+from hermes_cli.web_server_talos_messaging import mount_talos_messaging
+
+mount_talos_messaging(app)
 mount_spa(app)
 
 
