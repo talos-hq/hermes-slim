@@ -29,6 +29,21 @@ test('a launcher click moves the existing chat here before activation', () => {
   assert.equal(helper.desktops[0].id, 'old')
 })
 
+test('every chat window moves here so focusing the main window cannot switch desktops', () => {
+  const currentDesktop = { id: 'clicked-desktop' }
+  const old = { id: 'old' }
+  const popout = { normalWindow: true, resourceClass: 'hermes', desktops: [old] }
+  const main = { normalWindow: true, resourceClass: 'hermes', desktops: [old] }
+  const pinned = { normalWindow: true, resourceClass: 'hermes', onAllDesktops: true, desktops: [old] }
+  const quickEntry = { normalWindow: true, resourceClass: 'hermes', skipTaskbar: true, desktops: [old] }
+  const workspace = { currentDesktop, windowList: () => [popout, main, pinned, quickEntry], activeWindow: null }
+  vm.runInNewContext(readFileSync(new URL('./linux-summon.js', import.meta.url), 'utf8'), { workspace })
+  assert.equal(popout.desktops[0], currentDesktop)
+  assert.equal(main.desktops[0], currentDesktop)
+  assert.equal(pinned.desktops[0], old)
+  assert.equal(quickEntry.desktops[0], old)
+})
+
 test('a cold launch leaves other applications alone', () => {
   const workspace = { currentDesktop: { id: 'here' }, windowList: () => [], activeWindow: null }
   vm.runInNewContext(readFileSync(new URL('./linux-summon.js', import.meta.url), 'utf8'), { workspace })
