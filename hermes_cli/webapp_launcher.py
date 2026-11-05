@@ -309,7 +309,8 @@ def _sign_out(target: Path) -> int:
             # No gateway is running: replace the stored credential so no browser can use the old one
             # when one starts. Behind the sign-in gate, logins bound to it end too.
             try:
-                browser_session_token(target, rotate=True)
+                from hermes_cli import browser_credential
+                browser_credential.rotate(browser_session_token(target, rotate=True), home=target)
             except BrowserCredentialError as exc:
                 print(f"Nobody was signed out: {exc}")
                 return 1

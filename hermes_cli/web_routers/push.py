@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from gateway.push_delivery import PushSdkMissing, PushSettings, deliver
 from gateway.push_store import PushStore
 from hermes_cli.web_routers.webapp import _ticket_principal
+from hermes_cli import connector_tokens, push_rate_limit
 
 router = APIRouter()
 
@@ -40,7 +41,11 @@ class MailboxMessage(BaseModel):
 
 
 def _owner(request):
-    identity, _token = _ticket_principal(request)
+    if getattr(request.state, 'push_connector', None):
+        from hermes_cli.web_routers.webapp import SESSION_TOKEN_OWNER
+        identity = SESSION_TOKEN_OWNER
+    else:
+        identity, _token = _ticket_principal(request)
     return json.dumps([identity['provider'], identity.get('issuer', ''), identity['user_id']]), identity['user_id']
 
 
@@ -69,6 +74,7 @@ def _validate_subscription(subscription):
 @router.post('/subscribe')
 def subscribe(request: Request, body: Enrollment):
     owner, _user = _owner(request)
+    _limit_owner(request, 'subscribe', owner)
     subscription = body.subscription.model_dump()
     try:
         _validate_subscription(subscription)
@@ -109,6 +115,7 @@ def public_key(request: Request):
 @router.post('/mailbox')
 async def write_mailbox(request: Request, body: MailboxMessage):
     owner, user = _owner(request)
+    _limit_owner(request, 'mailbox', owner)
     if body.user_id is not None and body.user_id != user:
         raise HTTPException(403, 'Mailbox recipient must match the authenticated user')
     with _store() as store:
@@ -159,6 +166,29 @@ def message(request: Request, message_id: str):
     return JSONResponse(record, headers={'Cache-Control': 'no-store'})
 
 
+def _limit_owner(request, route, owner):
+    connector = getattr(request.state, 'push_connector', None)
+    principal = 'connector:' + connector['id'] if connector else owner
+    push_rate_limit.check(route, 'owner', principal)
+
+
+def _push_policy(request):
+    path = request.url.path
+    suffix = path.removeprefix('/api/push').removeprefix('/v1')
+    route = suffix.lstrip('/') if suffix in {'/mailbox', '/subscribe'} and request.method == 'POST' else None
+    if route:
+        push_rate_limit.check(route, 'ip', request.client.host if request.client else '')
+    bearer = request.headers.get('Authorization', '').removeprefix('Bearer ')
+    if bearer.startswith(connector_tokens.PREFIX):
+        connector = connector_tokens.authenticate(bearer)
+        if connector is None:
+            raise HTTPException(401, {'code': 'unauthorized', 'message': 'Invalid connector token'})
+        if not route or f'{route}:write' not in connector['scopes']:
+            raise HTTPException(403, {'code': 'insufficient_scope', 'message': 'Connector scope does not permit this operation'})
+        request.state.push_connector = connector
+        request.state.token_authenticated = True
+
+
 class LegacyPushHeaders:
     """Wrap the full app so even authentication and validation errors advertise v1."""
 
@@ -178,4 +208,12 @@ class LegacyPushHeaders:
                     (b'link', f'<{successor}>; rel="successor-version"'.encode())]
             await send(message)
 
+        if scope['type'] == 'http' and (path == '/api/push' or path.startswith('/api/push/')):
+            try:
+                _push_policy(Request(scope))
+            except HTTPException as error:
+                response = JSONResponse({'detail': error.detail}, status_code=error.status_code,
+                                        headers=error.headers)
+                await response(scope, receive, send_response)
+                return
         await self.app(scope, receive, send_response)

@@ -317,3 +317,121 @@ def test_mailbox_limit_cursor_and_owner_fetch(api, monkeypatch):
         response = client.get('/api/push/mailbox/' + ('page-0' if owner else 'unknown'))
         assert response.status_code == 404
         assert response.json()['detail']['code'] == 'message_not_found'
+
+
+@pytest.fixture
+def limited_api(api, monkeypatch):
+    from hermes_cli import push_rate_limit as limits
+    from hermes_cli.config import atomic_config_write, get_hermes_home
+    clock = [100.0]
+    monkeypatch.setattr(limits, '_clock', lambda: clock[0])
+    limits._reset_rate_limit()
+    atomic_config_write(get_hermes_home() / 'config.yaml', {'push': {'subject': 'mailto:push@example.com',
+        'rate_limit': {'mailbox_owner': 2, 'mailbox_ip': 20, 'subscribe_owner': 2,
+                       'subscribe_ip': 20, 'window_seconds': 60, 'max_buckets': 8}}})
+    yield api[0], clock
+    limits._reset_rate_limit()
+
+
+@pytest.mark.parametrize('prefix', ['/api/push', '/api/push/v1'])
+def test_mailbox_rate_limit_owner_and_window(limited_api, monkeypatch, prefix):
+    from hermes_cli.web_routers import push
+    client, clock = limited_api
+    body = {'message_id': 'limited', 'session_id': 's', 'message': 'hello'}
+    for _ in range(2):
+        assert client.post(prefix + '/mailbox', json=body).status_code == 200
+    response = client.post(prefix + '/mailbox', json=body)
+    assert response.status_code == 429
+    assert response.json()['detail']['code'] == 'rate_limited'
+    assert response.headers['Retry-After'] == '60'
+    with monkeypatch.context() as scoped:
+        scoped.setattr(push, '_owner', lambda request: ('other-owner', 'other'))
+        assert client.post(prefix + '/mailbox', json=body).status_code == 200
+    clock[0] += 60
+    assert client.post(prefix + '/mailbox', json=body).status_code == 200
+
+
+@pytest.mark.parametrize('gated', [False, True])
+def test_connector_scopes_revocation_and_rotation(api, monkeypatch, gated):
+    from hermes_cli import connector_tokens, browser_credential
+    client = api[0]
+    monkeypatch.setattr(client.app.state, 'auth_required', gated)
+    record, token = connector_tokens.create('agent', ['mailbox:write'])
+    client.headers['Authorization'] = 'Bearer ' + token
+    assert _write(client).status_code == 200
+    response = client.post('/api/push/v1/subscribe', json={'device_id': 'phone',
+        'subscription': {'endpoint': 'https://example.com', 'keys': {'auth': 'a', 'p256dh': 'b'}}})
+    assert response.status_code == 403
+    assert response.json()['detail']['code'] == 'insufficient_scope'
+    connector_tokens.revoke(record['id'])
+    assert _write(client).status_code == 401
+    client.headers['Authorization'] = 'Bearer unknown-token'
+    assert _write(client).status_code == 401
+    record, token = connector_tokens.create('agent two', ['mailbox:write', 'subscribe:write'])
+    browser_credential.rotate('replacement-browser-token')
+    assert next(row for row in connector_tokens.list_tokens() if row['id'] == record['id'])['revoked_at']
+    client.headers['Authorization'] = 'Bearer ' + token
+    assert _write(client).status_code == 401
+
+
+def test_subscribe_rate_limit_and_connector(api, limited_api, push_server):
+    from hermes_cli import connector_tokens
+    client, clock = limited_api
+    subscription, *_ = push_server
+    _, token = connector_tokens.create('subscriber', ['subscribe:write'])
+    client.headers['Authorization'] = 'Bearer ' + token
+    body = {'device_id': 'phone', 'subscription': subscription}
+    for _ in range(2):
+        assert client.post('/api/push/v1/subscribe', json=body).status_code == 200
+    assert client.post('/api/push/subscribe', json=body).status_code == 429
+    clock[0] += 60
+    assert client.post('/api/push/v1/subscribe', json=body).status_code == 200
+
+
+@pytest.mark.parametrize('route', ['mailbox', 'subscribe'])
+def test_push_ip_budget_includes_unauthenticated_attempts(limited_api, route):
+    client, clock = limited_api
+    client.headers.pop('Authorization')
+    for _ in range(20):
+        assert client.post('/api/push/v1/' + route, json={}).status_code == 401
+    response = client.post('/api/push/' + route, json={})
+    assert response.status_code == 429
+    assert response.headers['Retry-After'] == '60'
+    clock[0] += 60
+    assert client.post('/api/push/v1/' + route, json={}).status_code == 401
+
+
+def test_push_bucket_capacity_and_expiry(limited_api):
+    from hermes_cli import push_rate_limit as limits
+    _, clock = limited_api
+    for i in range(12):
+        limits.check('mailbox', 'owner', str(i))
+    assert len(limits._attempts) == 8
+    clock[0] += 60
+    limits.check('mailbox', 'owner', 'fresh')
+    assert len(limits._attempts) == 1
+
+
+def test_connector_cli_metadata_and_hash_storage(api, capsys):
+    import argparse
+    import hashlib
+    from hermes_cli import connector_tokens, talos_messaging
+    from hermes_cli.subcommands.talos_messaging import build_talos_messaging_parser
+    from hermes_state import SessionDB
+    parser = argparse.ArgumentParser()
+    build_talos_messaging_parser(parser.add_subparsers(), cmd=talos_messaging.run)
+    args = parser.parse_args(['talos-messaging', 'connector-token', 'create', '--name', 'reporter'])
+    assert args.func(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    with SessionDB() as db:
+        row = dict(db._read_one('SELECT * FROM push_connector_tokens WHERE id=?', (result['id'],)))
+    assert row['digest'] == hashlib.sha256(result['token'].encode()).hexdigest()
+    assert result['token'] not in json.dumps(row)
+    args = parser.parse_args(['talos-messaging', 'connector-token', 'list'])
+    args.func(args)
+    listed = capsys.readouterr().out
+    assert result['token'] not in listed
+    assert json.loads(listed)[0]['name'] == 'reporter'
+    args = parser.parse_args(['talos-messaging', 'connector-token', 'revoke', '--token-id', result['id']])
+    args.func(args)
+    assert connector_tokens.authenticate(result['token']) is None

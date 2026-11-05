@@ -250,12 +250,12 @@ alias remains available for this release; removal is deferred to a later release
 with advance notice. Every alias response includes `Deprecation: true` and a
 `Link` with `rel="successor-version"` pointing to its v1 endpoint.
 
-| Endpoint | Contract |
+| Endpoint | Contract / auth |
 | --- | --- |
 | `GET /api/push/v1/vapid-public-key` | Public VAPID key |
-| `POST /api/push/v1/subscribe` | Register or replace a device subscription |
+| `POST /api/push/v1/subscribe` | Register or replace a device subscription; browser credential/session or connector `subscribe:write` |
 | `DELETE /api/push/v1/subscribe?device_id=…` | Revoke a device subscription |
-| `POST /api/push/v1/mailbox` | Admit a message and attempt push delivery once |
+| `POST /api/push/v1/mailbox` | Admit a message and attempt push delivery once; browser credential/session or connector `mailbox:write` |
 | `GET /api/push/v1/mailbox?after=0&limit=50` | Cursor page with `messages`, `next_cursor`, `has_more` |
 | `GET /api/push/v1/mailbox/{message_id}` | Owner's message record; otherwise 404 with `message_not_found` |
 | `PATCH /api/push/v1/mailbox/{message_id}/read` | Mark the owner's message read |
@@ -272,3 +272,57 @@ Mailbox `limit` defaults to 50, accepts 1–200, and returns 422 outside that
 range. `has_more` is determined by fetching one extra row. Pass `next_cursor`
 as `after` to continue; an empty page preserves the input cursor. Single-message
 lookup returns the same 404 for unknown IDs and IDs belonging to another owner.
+
+
+### Connector credentials and request budgets
+
+Create a connector token per agent on the installation that serves the API:
+
+```bash
+hermes talos-messaging connector-token create --name report-agent --scope mailbox:write
+hermes talos-messaging connector-token create --name enrollment-agent --scope subscribe:write
+hermes talos-messaging connector-token list
+hermes talos-messaging connector-token revoke --token-id <id-from-create-or-list>
+```
+
+Creation prints JSON with the token **once**. Pass it as `Authorization: Bearer <token>`;
+keep it in the connector's secret configuration and never log it. Repeat `--scope` to grant
+both write operations. The default scope is `mailbox:write`. All other endpoints in the
+table require the existing browser credential/session; connector grants cannot read mail,
+delete subscriptions, or authorize other APIs. Missing scope returns 403 with
+`detail.code: insufficient_scope`; revoked or unknown tokens return 401.
+
+Tokens are installation/profile scoped. Metadata (id, label, scopes, creation and revocation
+timestamps) and a SHA-256 digest live in the existing profile `state.db`, in
+`push_connector_tokens`. Random 256-bit secrets make a digest appropriate; plaintext tokens
+are never persisted and cannot be recovered by listing. Independent revocation retains audit
+metadata. `browser_credential.on_rotate` revokes all active connectors in the rotating profile.
+Tokens survive process restarts; changing the browser credential through its rotation hook
+invalidates them. Connector writes target the installation's loopback browser mailbox
+(`legacy-token-owner`, provider `session-token`); cookie/OAuth mailboxes remain separate.
+
+Both POST operations and their legacy aliases use process-local sliding-window budgets:
+
+```yaml
+push:
+  rate_limit:
+    mailbox_owner: 60
+    mailbox_ip: 300
+    subscribe_owner: 10
+    subscribe_ip: 60
+    window_seconds: 60
+    max_buckets: 4096
+```
+
+Set these under `push.rate_limit` in the profile's `config.yaml`. Each route has independent
+buckets keyed by profile plus authenticated principal (connector id or browser owner), and
+by profile plus ASGI peer IP. IP attempts count before authentication, including rejected
+credentials; owner attempts count after authentication. Aliases share the v1 budgets.
+Only trust forwarded IP normalization configured upstream; arbitrary forwarded headers are
+ignored. All accesses prune expired entries; least-recently-used buckets are evicted at the
+configured process-wide capacity. Each bucket retains at most its configured request budget.
+429 responses include integer seconds in `Retry-After` and
+`detail: {code: rate_limited, message: ...}`. Windows recover without a restart; process
+restarts clear budgets. Multiple worker processes have independent limits, so public
+multi-worker deployments also need a shared proxy limit. Capacity eviction makes this
+best-effort protection, as with the existing password-login buckets.

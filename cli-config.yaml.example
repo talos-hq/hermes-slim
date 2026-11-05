@@ -2431,3 +2431,15 @@ updates:
 #   # This runs ONCE per process at startup, so it cannot replace a credential
 #   # that expires mid-session. For a single provider whose token needs
 #   # re-minting during a session, use `providers.<name>.key_cmd` instead.
+
+# Talos push API budgets (per process; aliases share the canonical v1 budgets).
+# Create a scoped token per agent with `hermes talos-messaging connector-token create`.
+# push:
+#   subject: "mailto:ops@example.com"  # VAPID contact; private key goes in secret storage
+#   rate_limit:
+#     mailbox_owner: 60
+#     mailbox_ip: 300
+#     subscribe_owner: 10
+#     subscribe_ip: 60
+#     window_seconds: 60
+#     max_buckets: 4096
