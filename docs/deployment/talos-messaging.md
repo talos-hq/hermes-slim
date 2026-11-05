@@ -30,14 +30,14 @@ variants on the same port. The OpenAI-compatible API server is a different liste
 The FastAPI web/dashboard listener mounts `apps/talos-messaging/dist` at `/talos/`
 (`hermes_cli/web_server_talos_messaging.py`). The stock Dockerfile builds other frontends
 but does **not** build this PWA: explicitly include its build output in a derived image.
-The authoritative REST paths are **`/api/push/mailbox`**, not `/api/mailbox`.
-`message_id` in the JSON body is the mailbox idempotency key; an `Idempotency-Key`
-header alone does not enforce deduplication.
+The authoritative REST paths are **`/api/push/v1/mailbox`**, not `/api/mailbox`.
+`Idempotency-Key` enforces owner-scoped request deduplication; without it,
+`message_id` in the JSON body provides the existing mailbox deduplication.
 
 **Browser auth compatibility remains a release gate:** the current PWA sends
 `X-Talos-Messaging-Key`; that credential only authorizes `/api/webapp/socket-ticket`,
 not the push/mailbox routes. Its mailbox UI falls back from `/api/mailbox` to
-`/api/push/mailbox`, but that does not fix authentication. A passing bearer smoke test
+`/api/push/mailbox` (the deprecated alias), but that does not fix authentication. A passing bearer smoke test
 proves the backend path, not phone enrollment. Before advertising phone push, wire
 browser enrollment/mailbox access to the existing authenticated session flow and
 verify on a real device. This preparation does not change the auth boundary.
@@ -80,7 +80,7 @@ engages authentication even when the backend binds loopback. The principal is
 principal. A loopback-only token owner is different, so keep the public configuration
 stable. OAuth/password browser sessions are separate identities with separate mailboxes.
 Configure the Talos connector's existing `platforms.talos.extra.endpoint` as
-`https://talos.talosbot.ai/api/push/mailbox` and `dry_run: false`, and enable the plugin
+`https://talos.talosbot.ai/api/push/v1/mailbox` and `dry_run: false`, and enable the plugin
 through the existing plugin setup UX. VAPID is signing authority, not API authentication.
 
 Generate a signing key in the managed Python environment (with `cryptography` installed):
@@ -243,3 +243,32 @@ including foreground, background and revoked-permission cases. Browser localhost
 permit service workers during development, but it is not a publicly reachable production
 origin. Keep TLS, application auth, browser permission and VAPID configuration as separate
 requirements. Push failure does not roll back a mailbox commit.
+
+
+The canonical messaging API is `/api/push/v1`. The deprecated `/api/push`
+alias remains available for this release; removal is deferred to a later release
+with advance notice. Every alias response includes `Deprecation: true` and a
+`Link` with `rel="successor-version"` pointing to its v1 endpoint.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/push/v1/vapid-public-key` | Public VAPID key |
+| `POST /api/push/v1/subscribe` | Register or replace a device subscription |
+| `DELETE /api/push/v1/subscribe?device_id=…` | Revoke a device subscription |
+| `POST /api/push/v1/mailbox` | Admit a message and attempt push delivery once |
+| `GET /api/push/v1/mailbox?after=0&limit=50` | Cursor page with `messages`, `next_cursor`, `has_more` |
+| `GET /api/push/v1/mailbox/{message_id}` | Owner's message record; otherwise 404 with `message_not_found` |
+| `PATCH /api/push/v1/mailbox/{message_id}/read` | Mark the owner's message read |
+
+`Idempotency-Key` is durable and scoped to the authenticated owner. Repeating
+an identical JSON body under the same key returns 200 with `created: false`,
+without another mailbox row or push. Object key ordering does not matter.
+Changing any body field, including `message_id`, under that key returns 409
+with `detail.code: idempotency_conflict`. Without the header, `message_id`
+retains its existing deduplication behavior. The connector reuses its key and
+body across retries.
+
+Mailbox `limit` defaults to 50, accepts 1–200, and returns 422 outside that
+range. `has_more` is determined by fetching one extra row. Pass `next_cursor`
+as `after` to continue; an empty page preserves the input cursor. Single-message
+lookup returns the same 404 for unknown IDs and IDs belonging to another owner.

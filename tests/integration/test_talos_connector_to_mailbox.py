@@ -43,7 +43,7 @@ def live_api(tmp_path, monkeypatch):
 
     delivered: list[tuple[str, str]] = []
 
-    async def fake_deliver(store, owner, message_id, settings, **kwargs):  # noqa: ANN001
+    async def fake_deliver(store, owner, message_id, settings, **kwargs):
         delivered.append((owner, message_id))
 
     monkeypatch.setattr(push_routes, "deliver", fake_deliver)
@@ -145,3 +145,25 @@ def test_recipient_must_match_the_authenticated_user(live_api):
     assert not result.success
     assert "403" in (result.error or "")
     assert delivered == []
+
+
+def test_v1_connector_and_header_replay_contract(live_api):
+    base, delivered = live_api
+    endpoint = f"{base}/api/push/v1/mailbox"
+    client = NotificationClient(endpoint, TOKEN)
+    assert asyncio.run(client.send_notification(USER, 'session', _message('v1'))).success
+    headers = {'Authorization': f'Bearer {TOKEN}', 'Idempotency-Key': 'http-retry'}
+    body = {'message_id': 'http', 'session_id': 'session', 'message': 'hello'}
+    assert httpx.post(endpoint, headers=headers, json=body).json()['created'] is True
+    assert httpx.post(endpoint, headers=headers, json=body).json()['created'] is False
+    assert httpx.post(endpoint, headers=headers, json=body | {'message': 'changed'}).status_code == 409
+    first = httpx.get(endpoint, headers=headers, params={'limit': 1}).json()
+    assert first['has_more'] is True
+    last = httpx.get(endpoint, headers=headers, params={'limit': 1, 'after': first['next_cursor']}).json()
+    assert last['has_more'] is False
+    assert httpx.get(endpoint + '/http', headers=headers).json()['message'] == 'hello'
+    assert httpx.get(endpoint + '/unknown', headers=headers).status_code == 404
+    alias = httpx.get(f'{base}/api/push/mailbox', headers=headers)
+    assert alias.headers['Deprecation'] == 'true'
+    assert alias.headers['Link'] == '</api/push/v1/mailbox>; rel="successor-version"'
+    assert len(delivered) == 2

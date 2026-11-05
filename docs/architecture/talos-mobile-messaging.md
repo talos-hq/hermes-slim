@@ -74,17 +74,17 @@ themselves are single-use socket credentials and cannot authorize REST requests.
 
 | Method and path | Request / response |
 | --- | --- |
-| `GET /api/push/vapid-public-key` | `{ "public_key": "<base64url P-256 public key>" }` |
-| `POST /api/push/subscribe` | `{ "device_id": "iphone", "subscription": <PushSubscription.toJSON()> }` |
-| `DELETE /api/push/subscribe?device_id=iphone` | Revoke that user's device; safe to repeat |
-| `POST /api/push/mailbox` | `{ "message_id": "event-id", "session_id": "session-id", "message": "Final text" }` |
-| `GET /api/push/mailbox?after=0` | `messages` (up to 100), `next_cursor`; use the cursor as `after` |
-| `PATCH /api/push/mailbox/{message_id}/read` | Persist read state |
+| `GET /api/push/v1/vapid-public-key` | `{ "public_key": "<base64url P-256 public key>" }` |
+| `POST /api/push/v1/subscribe` | `{ "device_id": "iphone", "subscription": <PushSubscription.toJSON()> }` |
+| `DELETE /api/push/v1/subscribe?device_id=iphone` | Revoke that user's device; safe to repeat |
+| `POST /api/push/v1/mailbox` | `{ "message_id": "event-id", "session_id": "session-id", "message": "Final text" }` |
+| `GET /api/push/v1/mailbox?after=0` | `messages`, `has_more`, `next_cursor` (default limit 50; range 1–200); use the cursor as `after` |
+| `PATCH /api/push/v1/mailbox/{message_id}/read` | Persist read state |
 
 Enrollment replaces the subscription for the authenticated user/device pair. The mailbox writer
 can specify `user_id` for compatibility with the Talos connector; it must match the authenticated
 principal (`legacy-token-owner` for the loopback browser token). Configure the connector endpoint
-as `https://<gateway>/api/push/mailbox` and its token as the existing authorized gateway credential.
+as `https://<gateway>/api/push/v1/mailbox` and its token as the existing authorized gateway credential.
 This endpoint cannot send to an arbitrary different user's mailbox.
 
 Set `push.subject` in `config.yaml` to your VAPID contact URI, for example `mailto:ops@example.com`.
@@ -217,3 +217,32 @@ connector, or the client.
   notification carries no microphone permission and no reply affordance.
 - No background recording; the mic is live only while the user is in a recording
   state with the app foregrounded.
+
+
+The canonical messaging API is `/api/push/v1`. The deprecated `/api/push`
+alias remains available for this release; removal is deferred to a later release
+with advance notice. Every alias response includes `Deprecation: true` and a
+`Link` with `rel="successor-version"` pointing to its v1 endpoint.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/push/v1/vapid-public-key` | Public VAPID key |
+| `POST /api/push/v1/subscribe` | Register or replace a device subscription |
+| `DELETE /api/push/v1/subscribe?device_id=…` | Revoke a device subscription |
+| `POST /api/push/v1/mailbox` | Admit a message and attempt push delivery once |
+| `GET /api/push/v1/mailbox?after=0&limit=50` | Cursor page with `messages`, `next_cursor`, `has_more` |
+| `GET /api/push/v1/mailbox/{message_id}` | Owner's message record; otherwise 404 with `message_not_found` |
+| `PATCH /api/push/v1/mailbox/{message_id}/read` | Mark the owner's message read |
+
+`Idempotency-Key` is durable and scoped to the authenticated owner. Repeating
+an identical JSON body under the same key returns 200 with `created: false`,
+without another mailbox row or push. Object key ordering does not matter.
+Changing any body field, including `message_id`, under that key returns 409
+with `detail.code: idempotency_conflict`. Without the header, `message_id`
+retains its existing deduplication behavior. The connector reuses its key and
+body across retries.
+
+Mailbox `limit` defaults to 50, accepts 1–200, and returns 422 outside that
+range. `has_more` is determined by fetching one extra row. Pass `next_cursor`
+as `after` to continue; an empty page preserves the input cursor. Single-message
+lookup returns the same 404 for unknown IDs and IDs belonging to another owner.

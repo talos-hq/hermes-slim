@@ -133,7 +133,7 @@ deliver, display) stopped.
 | --- | --- | --- |
 | 1 | Open the install link in Safari, **Share → Add to Home Screen**, launch from the icon | Standalone window, no Safari chrome |
 | 2 | Tap **Enable notifications** (a user gesture; it must not fire on load) | iOS permission prompt appears |
-| 3 | Confirm the subscription reached the server | The `POST /api/push/subscribe` response was 2xx and the device appears in the gateway's push store |
+| 3 | Confirm the subscription reached the server | The `POST /api/push/v1/subscribe` response was 2xx and the device appears in the gateway's push store |
 | 4 | Trigger a real message from the agent, not `curl` against a stub | Mailbox row created with the message id |
 | 5 | Receive it with the app open | In-app message appears |
 | 6 | Receive it with the app **closed** (swipe it away, lock the phone) | Notification banner on the lock screen |
@@ -145,3 +145,32 @@ deliver, display) stopped.
 Steps 1–3 are reachable on a local network. Steps 4–10 require a public HTTPS
 origin for the app plus the deployment in
 [Deployment](../deployment/talos-messaging.md).
+
+
+The canonical messaging API is `/api/push/v1`. The deprecated `/api/push`
+alias remains available for this release; removal is deferred to a later release
+with advance notice. Every alias response includes `Deprecation: true` and a
+`Link` with `rel="successor-version"` pointing to its v1 endpoint.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/push/v1/vapid-public-key` | Public VAPID key |
+| `POST /api/push/v1/subscribe` | Register or replace a device subscription |
+| `DELETE /api/push/v1/subscribe?device_id=…` | Revoke a device subscription |
+| `POST /api/push/v1/mailbox` | Admit a message and attempt push delivery once |
+| `GET /api/push/v1/mailbox?after=0&limit=50` | Cursor page with `messages`, `next_cursor`, `has_more` |
+| `GET /api/push/v1/mailbox/{message_id}` | Owner's message record; otherwise 404 with `message_not_found` |
+| `PATCH /api/push/v1/mailbox/{message_id}/read` | Mark the owner's message read |
+
+`Idempotency-Key` is durable and scoped to the authenticated owner. Repeating
+an identical JSON body under the same key returns 200 with `created: false`,
+without another mailbox row or push. Object key ordering does not matter.
+Changing any body field, including `message_id`, under that key returns 409
+with `detail.code: idempotency_conflict`. Without the header, `message_id`
+retains its existing deduplication behavior. The connector reuses its key and
+body across retries.
+
+Mailbox `limit` defaults to 50, accepts 1–200, and returns 422 outside that
+range. `has_more` is determined by fetching one extra row. Pass `next_cursor`
+as `after` to continue; an empty page preserves the input cursor. Single-message
+lookup returns the same 404 for unknown IDs and IDs belonging to another owner.
