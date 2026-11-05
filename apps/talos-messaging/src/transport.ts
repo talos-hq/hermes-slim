@@ -9,6 +9,7 @@
  */
 
 import { JsonRpcGatewayClient, buildHermesWebSocketUrl } from '@hermes/shared'
+import { openRelaySocket } from './relay'
 
 export interface AgentThread {
   id: string
@@ -25,23 +26,47 @@ export interface Reply {
 const TICKET_PATH = '/api/webapp/socket-ticket?socket=gateway'
 
 export class MessagingTransport extends JsonRpcGatewayClient {
-  private ticketSource: () => Promise<string>
+  /** The relay's seat, when the gateway's own address is not reachable. */
+  private relaySocket: WebSocket | null = null
+  private readonly directUrl: string
 
-  constructor(token: string) {
+  constructor(private readonly token: string) {
+    // A socket factory lets the same client speak to whichever path opened:
+    // the gateway's own `/api/ws`, or a relay seat that a bridge forwards.
     super({
       closedErrorMessage: 'Connection closed',
       connectErrorMessage: 'Cannot reach the agent',
       notConnectedErrorMessage: 'Not connected',
       requestIdPrefix: 'tm',
+      socketFactory: (url) => this.relaySocket ?? new WebSocket(url),
     })
-    this.ticketSource = () => fetchTicket(token)
+    this.directUrl = '/api/ws'
   }
 
-  /** Dial `/api/ws` with a fresh ticket minted from the install key. */
+  /**
+   * Reach the agent by the shortest path that works.
+   *
+   * Same origin first — the phone on the same network, or through a tunnel,
+   * dials the gateway directly with a single-use ticket. When that address does
+   * not answer, the phone dials the public relay instead and
+   * `hermes talos-messaging serve` carries the frames to the gateway. A rejected
+   * key is never retried over the relay: the key is the problem, not the route.
+   */
   async connect(): Promise<void> {
-    const ticket = await this.ticketSource()
+    try {
+      const ticket = await fetchTicket(this.token)
+      await super.connect(
+        buildHermesWebSocketUrl({ authParam: ['ticket', ticket], basePath: '', path: this.directUrl }),
+      )
+      return
+    } catch (error) {
+      if (isKeyRejection(error)) throw error
+      // No gateway here: meet the agent at the relay.
+    }
+    this.relaySocket = await openRelaySocket(this.token)
+    // The factory above returns the relay seat, so the URL is only a placeholder.
     await super.connect(
-      buildHermesWebSocketUrl({ authParam: ['ticket', ticket], basePath: '', path: '/api/ws' }),
+      buildHermesWebSocketUrl({ authParam: ['ticket', 'relay'], basePath: '', path: this.directUrl }),
     )
   }
 
@@ -85,6 +110,11 @@ export class MessagingTransport extends JsonRpcGatewayClient {
       handler({ sessionId: payload.session_id, text: payload.text })
     })
   }
+}
+
+/** A rejected key is the end of the road; only an unreachable gateway falls back. */
+export function isKeyRejection(error: unknown): boolean {
+  return error instanceof Error && error.message === 'key rejected'
 }
 
 /**

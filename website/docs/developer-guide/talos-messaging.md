@@ -91,7 +91,14 @@ phone  ⇄  relay (one agent seat, one phone seat)  ⇄  hermes talos-messaging 
   from that same key, and forwards frames verbatim in both directions. It parses
   nothing, logs no payload, and reconnects with backoff when the relay drops.
 - The relay's own `peer_joined` / `peer_left` frames are housekeeping: the bridge
-  consumes them so the gateway never sees them.
+  consumes them so the gateway never sees them, and the phone's seat asks for no
+  housekeeping at all (`?quiet=1`) because its socket goes straight into the
+  JSON-RPC client.
+- The phone picks the path itself (`apps/talos-messaging/src/transport.ts`):
+  same origin first, and only when that address does not answer does it dial the
+  relay. A **rejected key never falls back** — the key is the problem, not the
+  route — so a revoked phone asks for a new link instead of bouncing between
+  transports.
 
 ## The key and the install link
 
