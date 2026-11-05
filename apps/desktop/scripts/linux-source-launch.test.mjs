@@ -50,6 +50,31 @@ test('a cold launch leaves other applications alone', () => {
   assert.equal(workspace.activeWindow, null)
 })
 
+test.skipIf(process.platform !== 'linux')('Plasma without qdbus still opens the app', () => {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'hermes-launch-test-'))
+  const root = path.join(scratch, 'checkout')
+  const script = path.join(root, 'apps/desktop/scripts/linux-source-launch.mjs')
+  const fake = path.join(scratch, 'electron')
+  const output = path.join(scratch, 'launched')
+  try {
+    mkdirSync(path.dirname(script), { recursive: true })
+    mkdirSync(path.join(root, 'apps/desktop/dist'), { recursive: true })
+    mkdirSync(path.join(root, '.venv/bin'), { recursive: true })
+    writeFileSync(path.join(root, 'apps/desktop/dist/electron-main.mjs'), '')
+    writeFileSync(path.join(root, '.venv/bin/hermes'), '')
+    writeFileSync(script, readFileSync(new URL('./linux-source-launch.mjs', import.meta.url)))
+    writeFileSync(fake, `#!${process.execPath}\nrequire('fs').writeFileSync(process.env.LAUNCH_RESULT, 'yes')\n`)
+    chmodSync(fake, 0o700)
+    execFileSync(process.execPath, [script, fake], {
+      stdio: 'ignore',
+      env: { HERMES_DESKTOP_PYTHON: '', PATH: path.join(scratch, 'empty'), XDG_CURRENT_DESKTOP: 'KDE', LAUNCH_RESULT: output },
+    })
+    assert.equal(readFileSync(output, 'utf8'), 'yes')
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
 test.skipIf(process.platform !== 'linux')('the desktop process receives this checkout and its backend override', () => {
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'hermes-launch-test-'))
   const root = path.join(scratch, 'checkout')
