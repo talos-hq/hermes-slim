@@ -55,9 +55,14 @@ already speak, over the same ticketed `/api/ws` socket
 - `message.delta` / `message.complete` events to render a streaming reply;
 - `session.interrupt` for the stop button.
 
-Auth is a ticket, not a long-lived query parameter: the app exchanges its bearer
-token at `POST /api/webapp/socket-ticket` for a single-use, short-lived socket
-ticket and passes that on the WebSocket URL. That is the same gate
+Auth is a ticket, not a long-lived query parameter: the app exchanges its key at
+`POST /api/webapp/socket-ticket?socket=gateway` for a single-use, short-lived
+socket ticket and passes that on the WebSocket URL. The key rides in its own
+`X-Talos-Messaging-Key` header, and the server accepts it on that one route and
+for `socket=gateway` only — a 403 for every other socket, and no dashboard route
+recognizes it at all, so a phone can chat and can never open a shell, read a
+file or change a setting. Revoking the key stops the phone without touching a
+signed-in browser. That is the same gate
 `_ws_auth_ok` already enforces, so Talos Messaging needs no new auth path and
 gains nothing a dashboard tab does not already have.
 

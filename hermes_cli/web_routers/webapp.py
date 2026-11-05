@@ -162,6 +162,37 @@ async def issue_window_ticket(request: Request):
     return JSONResponse({"ticket": ticket}, headers={"Cache-Control": "no-store"})
 
 
+#: A Talos Messaging key is *not* a dashboard session token: it presents its own
+#: header, and the only thing it buys is a chat socket ticket.
+MESSAGING_KEY_HEADER = "X-Talos-Messaging-Key"
+MESSAGING_PROVIDER = "talos-messaging"
+
+
+def _messaging_principal(request: Request) -> dict | None:
+    """The identity of a caller presenting this installation's messaging key.
+
+    ``None`` when the request carries no messaging header at all — the ordinary
+    browser path. A header with a wrong value is a 401, not a fall-through: a
+    caller that meant to authenticate as a phone should learn it failed.
+    """
+    presented = request.headers.get(MESSAGING_KEY_HEADER, "")
+    if not presented:
+        return None
+    import hmac
+
+    from hermes_cli import talos_messaging
+
+    try:
+        from hermes_cli.config import get_hermes_home
+
+        stored = talos_messaging.read_token(get_hermes_home())
+    except Exception:
+        stored = None
+    if stored is None or not hmac.compare_digest(presented.encode(), stored.encode()):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {"user_id": "talos-messaging", "provider": MESSAGING_PROVIDER, "issuer": ""}
+
+
 def _ticket_principal(request: Request) -> tuple[dict, str | None]:
     """``({user_id, provider, issuer}, session_token)`` of the caller: its verified login (no
     token), or on an unauthenticated loopback bind ``SESSION_TOKEN_OWNER`` and the session token
@@ -241,6 +272,15 @@ async def issue_socket_ticket(request: Request, socket: str = "", profile: str |
     surface, checks_profile = SOCKET_TICKETS[socket]
     if not getattr(policy(request.app.state), surface):
         raise HTTPException(404, f"Webapp {socket} tickets are unavailable on this surface")
+    # A phone holds the messaging key, not a dashboard credential: it may mint
+    # the chat socket's ticket and nothing else. Every other surface, route and
+    # session-token check is untouched, so the key cannot open a shell, a file
+    # or a dashboard page.
+    messaging = _messaging_principal(request)
+    if messaging is not None:
+        if socket != GATEWAY_SOCKET:
+            raise HTTPException(status_code=403, detail="A Talos Messaging key opens the chat socket only")
+        return _socket_ticket_response(request, messaging, socket, None)
     identity, session_token = _ticket_principal(request)
     profile_home = None
     if checks_profile:

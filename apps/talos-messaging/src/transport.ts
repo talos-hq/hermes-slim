@@ -87,12 +87,17 @@ export class MessagingTransport extends JsonRpcGatewayClient {
   }
 }
 
-/** Mint a single-use socket ticket from the install key. */
+/**
+ * Mint a single-use socket ticket from the install key.
+ *
+ * The key rides in its own header: the server accepts it on this one route and
+ * only for `socket=gateway`, so a phone can open a chat socket and nothing else
+ * — never a shell, a file or a dashboard page.
+ */
 export async function fetchTicket(token: string): Promise<string> {
   const response = await fetch(TICKET_PATH, {
     method: 'POST',
-    headers: { 'X-Hermes-Session-Token': token },
-    credentials: 'include',
+    headers: { 'X-Talos-Messaging-Key': token },
   })
   if (!response.ok) {
     throw new Error(response.status === 401 || response.status === 403 ? 'key rejected' : `ticket ${response.status}`)

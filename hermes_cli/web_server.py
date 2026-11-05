@@ -308,6 +308,18 @@ def _has_valid_session_token(request: Request) -> bool:
     return hmac.compare_digest(auth.encode(), f"Bearer {_SESSION_TOKEN}".encode())
 
 
+#: The one route a Talos Messaging key may reach. The route itself validates the
+#: key and narrows it to ``socket=gateway``; this list only lets the request past
+#: the blanket /api/ gate so that check can run.
+_MESSAGING_KEY_PATHS: frozenset[str] = frozenset({"/api/webapp/socket-ticket"})
+_MESSAGING_KEY_HEADER = "X-Talos-Messaging-Key"
+
+
+def _messaging_key_carried(request: Request, path: str) -> bool:
+    """True when the caller presents a Talos Messaging key on the one route it may reach."""
+    return path in _MESSAGING_KEY_PATHS and bool(request.headers.get(_MESSAGING_KEY_HEADER, ""))
+
+
 # Routes that may also authenticate via ``?token=`` for Electron's remote
 # "open externally" download link. Browser pages use path-bound file tickets
 # instead (``web_server_file_tickets``), so the session token never lands in
@@ -469,6 +481,7 @@ async def auth_middleware(request: Request, call_next):
         and not path.startswith("/api/mcp/oauth/callback/")
         and not _has_valid_session_token(request)
         and not _has_valid_query_token(request, path)
+        and not _messaging_key_carried(request, path)
     ):
         return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
