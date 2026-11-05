@@ -284,7 +284,7 @@ def test_header_idempotency_is_durable_and_owner_scoped(api, monkeypatch):
     assert replay.json()['created'] is False
     conflict = client.post('/api/push/mailbox', json=body | {'message_id': 'new'}, headers=headers)
     assert conflict.status_code == 409
-    assert conflict.json()['detail']['code'] == 'idempotency_conflict'
+    assert conflict.json()['code'] == 'idempotency_conflict'
     assert len(client.get('/api/push/mailbox').json()['messages']) == 1
     assert calls == ['keyed']
     monkeypatch.setattr(push, '_owner', lambda request: ('other-owner', 'other'))
@@ -316,7 +316,7 @@ def test_mailbox_limit_cursor_and_owner_fetch(api, monkeypatch):
             monkeypatch.setattr(push, '_owner', lambda request: (owner, 'other'))
         response = client.get('/api/push/mailbox/' + ('page-0' if owner else 'unknown'))
         assert response.status_code == 404
-        assert response.json()['detail']['code'] == 'message_not_found'
+        assert response.json()['code'] == 'message_not_found'
 
 
 @pytest.fixture
@@ -342,7 +342,7 @@ def test_mailbox_rate_limit_owner_and_window(limited_api, monkeypatch, prefix):
         assert client.post(prefix + '/mailbox', json=body).status_code == 200
     response = client.post(prefix + '/mailbox', json=body)
     assert response.status_code == 429
-    assert response.json()['detail']['code'] == 'rate_limited'
+    assert response.json()['code'] == 'rate_limited'
     assert response.headers['Retry-After'] == '60'
     with monkeypatch.context() as scoped:
         scoped.setattr(push, '_owner', lambda request: ('other-owner', 'other'))
@@ -362,7 +362,7 @@ def test_connector_scopes_revocation_and_rotation(api, monkeypatch, gated):
     response = client.post('/api/push/v1/subscribe', json={'device_id': 'phone',
         'subscription': {'endpoint': 'https://example.com', 'keys': {'auth': 'a', 'p256dh': 'b'}}})
     assert response.status_code == 403
-    assert response.json()['detail']['code'] == 'insufficient_scope'
+    assert response.json()['code'] == 'insufficient_scope'
     connector_tokens.revoke(record['id'])
     assert _write(client).status_code == 401
     client.headers['Authorization'] = 'Bearer unknown-token'

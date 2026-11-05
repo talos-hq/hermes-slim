@@ -15,7 +15,10 @@ from gateway.push_store import PushStore
 from hermes_cli.web_routers.webapp import _ticket_principal
 from hermes_cli import connector_tokens, push_rate_limit
 
-router = APIRouter()
+from hermes_cli.web_routers import push_contract as contract
+
+router = APIRouter(responses={status: {'model': contract.PushError}
+                             for status in (400, 401, 403, 404, 405, 409, 422, 429, 500, 503)})
 
 
 class SubscriptionKeys(BaseModel):
@@ -71,7 +74,7 @@ def _validate_subscription(subscription):
         raise ValueError('Invalid push auth key')
 
 
-@router.post('/subscribe')
+@router.post('/subscribe', response_model=contract.Registered)
 def subscribe(request: Request, body: Enrollment):
     owner, _user = _owner(request)
     _limit_owner(request, 'subscribe', owner)
@@ -85,7 +88,7 @@ def subscribe(request: Request, body: Enrollment):
     return {'registered': True}
 
 
-@router.delete('/subscribe')
+@router.delete('/subscribe', response_model=contract.Revoked)
 def revoke(request: Request, device_id: str = Query(min_length=1, max_length=256)):
     owner, _user = _owner(request)
     with _store() as store:
@@ -93,7 +96,7 @@ def revoke(request: Request, device_id: str = Query(min_length=1, max_length=256
     return {'revoked': True}
 
 
-@router.get('/vapid-public-key')
+@router.get('/vapid-public-key', response_model=contract.PublicKey)
 def public_key(request: Request):
     _owner(request)
     settings = PushSettings.load()
@@ -104,15 +107,16 @@ def public_key(request: Request):
     except PushSdkMissing:
         raise HTTPException(
             503,
-            'Web Push extras are not installed; install the optional push dependencies to enable '
-            'notification delivery. The mailbox keeps working without them.',
+            {'code': 'push_extras_missing',
+             'message': 'Web Push extras are not installed; install the optional push dependencies '
+                        'to enable notification delivery. The mailbox keeps working without them.'},
         ) from None
     except (ValueError, TypeError):
         raise HTTPException(503, 'Push is not configured') from None
     return JSONResponse({'public_key': key}, headers={'Cache-Control': 'no-store'})
 
 
-@router.post('/mailbox')
+@router.post('/mailbox', response_model=contract.MailboxReceipt)
 async def write_mailbox(request: Request, body: MailboxMessage):
     owner, user = _owner(request)
     _limit_owner(request, 'mailbox', owner)
@@ -135,7 +139,7 @@ async def write_mailbox(request: Request, body: MailboxMessage):
     return {'id': body.message_id, 'created': admitted}
 
 
-@router.get('/mailbox')
+@router.get('/mailbox', response_model=contract.MailboxPage)
 def mailbox(request: Request, after: int = Query(default=0, ge=0),
             limit: int = Query(default=50, ge=1, le=200)):
     owner, _user = _owner(request)
@@ -146,7 +150,7 @@ def mailbox(request: Request, after: int = Query(default=0, ge=0),
                         headers={'Cache-Control': 'no-store'})
 
 
-@router.patch('/mailbox/{message_id}/read')
+@router.patch('/mailbox/{message_id}/read', response_model=contract.ReadReceipt)
 def mark_read(request: Request, message_id: str):
     owner, _user = _owner(request)
     with _store() as store:
@@ -156,7 +160,15 @@ def mark_read(request: Request, message_id: str):
     return {'read': True}
 
 
-@router.get('/mailbox/{message_id}')
+@router.get('/status', response_model=contract.PushStatus)
+def status(request: Request):
+    owner, _user = _owner(request)
+    with _store() as store:
+        payload = store.status(owner)
+    return JSONResponse(payload, headers={'Cache-Control': 'no-store'})
+
+
+@router.get('/mailbox/{message_id}', response_model=contract.Message)
 def message(request: Request, message_id: str):
     owner, _user = _owner(request)
     with _store() as store:
@@ -182,7 +194,7 @@ def _push_policy(request):
     if bearer.startswith(connector_tokens.PREFIX):
         connector = connector_tokens.authenticate(bearer)
         if connector is None:
-            raise HTTPException(401, {'code': 'unauthorized', 'message': 'Invalid connector token'})
+            raise HTTPException(401, {'code': 'unauthenticated', 'message': 'Invalid connector token'})
         if not route or f'{route}:write' not in connector['scopes']:
             raise HTTPException(403, {'code': 'insufficient_scope', 'message': 'Connector scope does not permit this operation'})
         request.state.push_connector = connector
@@ -200,7 +212,40 @@ class LegacyPushHeaders:
         legacy = (path == '/api/push' or path.startswith('/api/push/')) and not (
             path == '/api/push/v1' or path.startswith('/api/push/v1/'))
 
+        push_path = path == '/api/push' or path.startswith('/api/push/')
+        start = None
+        response_started = False
+        chunks = []
+
         async def send_response(message):
+            nonlocal start
+            if scope['type'] == 'http' and push_path:
+                if message['type'] == 'http.response.start' and message['status'] >= 400:
+                    start = message
+                    return
+                if start is not None and message['type'] == 'http.response.body':
+                    chunks.append(message.get('body', b''))
+                    if message.get('more_body', False):
+                        return
+                    try:
+                        original = json.loads(b''.join(chunks))
+                    except (ValueError, UnicodeDecodeError):
+                        original = {}
+                    body = _error_body(start['status'], original)
+                    encoded = json.dumps(body).encode()
+                    start['headers'] = [(k, v) for k, v in start['headers']
+                                        if k.lower() not in (b'content-length', b'content-type')]
+                    start['headers'] += [(b'content-length', str(len(encoded)).encode()),
+                                         (b'content-type', b'application/json')]
+                    await send_start(start)
+                    await send({'type': 'http.response.body', 'body': encoded})
+                    return
+            await send_start(message)
+
+        async def send_start(message):
+            nonlocal response_started
+            if message['type'] == 'http.response.start':
+                response_started = True
             if message['type'] == 'http.response.start' and legacy:
                 successor = '/api/push/v1' + path[len('/api/push'):]
                 message['headers'] = list(message.get('headers', [])) + [
@@ -216,4 +261,26 @@ class LegacyPushHeaders:
                                         headers=error.headers)
                 await response(scope, receive, send_response)
                 return
-        await self.app(scope, receive, send_response)
+        try:
+            await self.app(scope, receive, send_response)
+        except Exception:
+            if scope['type'] != 'http' or not push_path or response_started:
+                raise
+            # Unexpected API failures must not expose exception text or escape the wire contract.
+            response = JSONResponse(_error_body(500, {}), status_code=500)
+            await response(scope, receive, send_response)
+
+
+def _error_body(status, body):
+    detail = body.get('detail', body) if isinstance(body, dict) else body
+    if isinstance(detail, dict) and 'code' in detail and 'message' in detail:
+        return {'code': detail['code'], 'message': detail['message']}
+    codes = {400: 'bad_request', 401: 'unauthenticated', 403: 'insufficient_scope',
+             404: 'message_not_found', 405: 'method_not_allowed', 409: 'message_conflict',
+             422: 'validation_error', 429: 'rate_limited', 503: 'push_unconfigured'}
+    code = codes.get(status, 'internal_error')
+    if status == 403 and detail == 'Mailbox recipient must match the authenticated user':
+        code = 'recipient_mismatch'
+    message = detail if isinstance(detail, str) and status < 500 else {
+        422: 'Request validation failed.', 503: 'Push is not configured.'}.get(status, 'Request failed.')
+    return {'code': code, 'message': message}
