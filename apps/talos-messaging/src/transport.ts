@@ -102,6 +102,14 @@ export class MessagingTransport extends JsonRpcGatewayClient {
     await this.request('session.interrupt', { session_id: sessionId })
   }
 
+  /** The agent finished a reply for one conversation. */
+  onComplete(handler: (sessionId: string) => void): () => void {
+    return this.on('message.complete', (event) => {
+      const payload = (event.payload ?? {}) as { session_id?: string }
+      if (payload.session_id) handler(payload.session_id)
+    })
+  }
+
   /** Streaming text for one conversation. */
   onDelta(handler: (reply: Reply) => void): () => void {
     return this.on('message.delta', (event) => {

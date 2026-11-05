@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MessagingTransport, type AgentThread } from './transport'
-import { localMessageId, readPreference, reconcile, writePreference, type Message } from './store'
+import { localMessageId, readPreference, reconcile, TranscriptStore, writePreference, type Message } from './store'
 import { keyFingerprint } from './auth'
 
 interface Props {
@@ -15,6 +15,8 @@ interface Props {
 
 export function App({ token }: Props): React.ReactElement {
   const transport = useMemo(() => new MessagingTransport(token), [token])
+  // The phone goes into a tunnel; the thread you were reading must survive it.
+  const store = useMemo(() => new TranscriptStore(), [])
   const [threads, setThreads] = useState<AgentThread[]>([])
   const [active, setActive] = useState<string | null>(() => readPreference(window.localStorage, 'thread'))
   const [messages, setMessages] = useState<Message[]>([])
@@ -54,7 +56,41 @@ export function App({ token }: Props): React.ReactElement {
 
   useEffect(() => {
     if (active) writePreference(window.localStorage, 'thread', active)
-  }, [active])
+    if (!active) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const stored = await store.messages(active)
+        if (!cancelled && stored.length > 0) setMessages((current) => reconcile(current, stored))
+      } catch {
+        // No IndexedDB (private mode, quota): the thread still works, it just
+        // will not survive the next cold start.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [active, store])
+
+  // Persist the reply the moment the agent finishes it (one write per turn, not
+  // one per delta).
+  useEffect(() => {
+    const stop = transport.onComplete((sessionId) => {
+      const text = streaming.current.get(sessionId) ?? ''
+      streaming.current.delete(sessionId)
+      if (!text) return
+      const message: Message = {
+        id: `srv-${sessionId}-${Date.now()}`,
+        sessionId,
+        role: 'agent',
+        text,
+        at: new Date().toISOString(),
+      }
+      void store.append(message).catch(() => undefined)
+      setMessages((current) => current.filter((entry) => entry.id !== `stream-${sessionId}`).concat(message))
+    })
+    return stop
+  }, [store, transport])
 
   const startThread = useCallback(async () => {
     try {
@@ -79,6 +115,7 @@ export function App({ token }: Props): React.ReactElement {
       pending: true,
     }
     setMessages((current) => [...current, message])
+    void store.append(message).catch(() => undefined)
     setDraft('')
     streaming.current.set(active, '')
     try {
