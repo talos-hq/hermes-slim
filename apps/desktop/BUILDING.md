@@ -18,8 +18,9 @@ For an environment outside `.venv`, set the existing
 `HERMES_DESKTOP_PYTHON` override to its absolute Python path; its adjacent
 `hermes` launcher must be installed from this checkout.
 
-On KDE Plasma, clicking this launcher moves the existing Hermes chat to the
-current virtual desktop before activating it. It requires `qdbus` and KWin's
+On KDE Plasma, clicking this launcher moves the existing Hermes chat windows,
+including pop-outs, to the current virtual desktop before activating them. Windows
+pinned to all desktops stay pinned. It requires `qdbus` and KWin's
 scripting service. Other applications and background notifications do not
 move. Without KDE it launches the source app with the desktop's usual focus
 behavior. The first positional argument selects Electron; when omitted it
