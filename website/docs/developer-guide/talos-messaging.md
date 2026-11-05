@@ -92,6 +92,9 @@ app on a phone:
 hermes talos-messaging [--print] [--email] [--revoke] [--url URL]
 ```
 
+Implemented in `hermes_cli/talos_messaging.py`. Its tests live in
+`tests/test_talos_messaging.py`.
+
 1. **Mint or reuse a key.** A dedicated token — `webapp/messaging-token`,
    `0600`, 43 URL-safe characters, the same shape the Webapp session token uses
    — separate from the dashboard's own token so revoking one never signs the
