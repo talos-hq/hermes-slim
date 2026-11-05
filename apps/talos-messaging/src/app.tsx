@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MessagingTransport, type AgentThread } from './transport'
 import { localMessageId, readPreference, reconcile, TranscriptStore, writePreference, type Message } from './store'
 import { keyFingerprint } from './auth'
+import { Notifications } from './notifications'
+import { Mailbox } from './mailbox'
 
 interface Props {
   token: string
@@ -142,6 +144,9 @@ export function App({ token }: Props): React.ReactElement {
           +
         </button>
       </header>
+
+      <Notifications token={token} />
+      <Mailbox token={token} />
 
       {active === null ? (
         <ul className="threads">

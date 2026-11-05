@@ -61,3 +61,8 @@ html, body, #root { height: 100%; margin: 0; background: var(--obsidian); color:
 .boot h1 { font-size: 30px; margin: 0 0 10px; }
 .boot p { color: var(--stone); line-height: 1.6; }
 :focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+.notifications, .mailbox { padding: 8px 16px; font-size: 13px; }
+.notifications p:empty, .mailbox:empty { display: none; }
+.notifications button { background: var(--panel); color: var(--gold); border: 1px solid var(--bronze); padding: 8px 12px; border-radius: 8px; }
+.notifications button:disabled { opacity: .5; }
+.mailbox { max-height: 25vh; overflow: auto; overflow-wrap: anywhere; }
