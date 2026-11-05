@@ -1,0 +1,67 @@
+"""Profile-local Talos mailbox and device subscriptions in the gateway state DB."""
+
+import json
+from datetime import UTC, datetime
+
+
+class PushStore:
+    """Use SessionDB's transaction and generation guards for all durable mutations."""
+
+    def __init__(self, db):
+        self.db = db
+        def initialize(conn):
+            conn.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
+                owner TEXT NOT NULL, device_id TEXT NOT NULL, subscription TEXT NOT NULL,
+                PRIMARY KEY (owner, device_id))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS push_mailbox (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL,
+                id TEXT NOT NULL, timestamp TEXT NOT NULL, session_id TEXT NOT NULL,
+                message TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (owner, id))""")
+        db._execute_write(initialize)
+
+    def register(self, owner, device_id, subscription):
+        self.db._write_sql("""INSERT INTO push_subscriptions VALUES (?, ?, ?)
+            ON CONFLICT(owner, device_id) DO UPDATE SET subscription=excluded.subscription""",
+            (owner, device_id, json.dumps(subscription, sort_keys=True)))
+
+    def revoke(self, owner, device_id, subscription=None):
+        # A late 410 for an old endpoint must not revoke a replacement subscription.
+        sql = "DELETE FROM push_subscriptions WHERE owner=? AND device_id=?"
+        params = (owner, device_id)
+        if subscription is not None:
+            sql += " AND subscription=?"
+            params += (json.dumps(subscription, sort_keys=True),)
+        self.db._write_sql(sql, params)
+
+    def subscriptions(self, owner):
+        return [(row['device_id'], json.loads(row['subscription'])) for row in
+                self.db._read_all("SELECT * FROM push_subscriptions WHERE owner=?", (owner,))]
+
+    def admit(self, owner, message_id, session_id, message):
+        """Commit the mailbox and claim this event's bounded push batch atomically.
+
+        A crash after commit may lose a wake-up, but never loses mailbox history or
+        replays an uncertain push. Push services cannot provide exactly-once delivery.
+        """
+        def insert(conn):
+            row = conn.execute("SELECT session_id, message FROM push_mailbox WHERE owner=? AND id=?",
+                               (owner, message_id)).fetchone()
+            if row is not None:
+                if (row['session_id'], row['message']) != (session_id, message):
+                    raise ValueError("Message id already used for different content")
+                return False
+            conn.execute("""INSERT INTO push_mailbox
+                (owner, id, timestamp, session_id, message) VALUES (?, ?, ?, ?, ?)""",
+                (owner, message_id, datetime.now(UTC).isoformat(), session_id, message))
+            return True
+        return self.db._execute_write(insert)
+
+    def mailbox(self, owner, after=0):
+        rows = self.db._read_all("""SELECT sequence, id, timestamp, session_id, message, read
+            FROM push_mailbox WHERE owner=? AND sequence>? ORDER BY sequence LIMIT 100""", (owner, after))
+        return [dict(row) | {'read': bool(row['read'])} for row in rows]
+
+    def mark_read(self, owner, message_id):
+        return self.db._write_rowcount("UPDATE push_mailbox SET read=1 WHERE owner=? AND id=?",
+                                       (owner, message_id)) > 0

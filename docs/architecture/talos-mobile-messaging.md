@@ -3,7 +3,8 @@
 Talos is an outbound notification platform plugin. Like Discord and Email it exports
 `register(ctx)`, registers a `BasePlatformAdapter` factory with `ctx.register_platform`,
 and returns `SendResult` from async sends. It does not subscribe to logs, tool hooks,
-LLM deltas, or conversation transcripts. No core files are changed.
+LLM deltas, or conversation transcripts. The gateway separately hosts the authoritative mailbox
+and Web Push receiver described below.
 
 ## Message path and deliberate emission
 
@@ -65,6 +66,47 @@ All attempts carry the same key; exhausted sends return failure without requesti
 another base-adapter retry loop. There is no durable local outbox: the producer owns
 recovery and must retain the original event ID.
 
+## Gateway mailbox and Web Push
+
+The gateway exposes these routes on its existing authenticated webapp API. They use the
+same browser cookie or loopback session token as `/api/webapp/socket-ticket`; socket tickets
+themselves are single-use socket credentials and cannot authorize REST requests.
+
+| Method and path | Request / response |
+| --- | --- |
+| `GET /api/push/vapid-public-key` | `{ "public_key": "<base64url P-256 public key>" }` |
+| `POST /api/push/subscribe` | `{ "device_id": "iphone", "subscription": <PushSubscription.toJSON()> }` |
+| `DELETE /api/push/subscribe?device_id=iphone` | Revoke that user's device; safe to repeat |
+| `POST /api/push/mailbox` | `{ "message_id": "event-id", "session_id": "session-id", "message": "Final text" }` |
+| `GET /api/push/mailbox?after=0` | `messages` (up to 100), `next_cursor`; use the cursor as `after` |
+| `PATCH /api/push/mailbox/{message_id}/read` | Persist read state |
+
+Enrollment replaces the subscription for the authenticated user/device pair. The mailbox writer
+can specify `user_id` for compatibility with the Talos connector; it must match the authenticated
+principal (`legacy-token-owner` for the loopback browser token). Configure the connector endpoint
+as `https://<gateway>/api/push/mailbox` and its token as the existing authorized gateway credential.
+This endpoint cannot send to an arbitrary different user's mailbox.
+
+Set `push.subject` in `config.yaml` to your VAPID contact URI, for example `mailto:ops@example.com`.
+Store `TALOS_VAPID_PRIVATE_KEY` only in the server environment/profile secret store, as base64url
+raw P-256 or base64 DER private key material. No key is generated implicitly. The public-key
+route derives the public point; the generic secret-reveal route refuses this server-only key.
+Push is disabled without a key and subject, while mailbox writes and reads continue to work.
+
+Subscriptions and mailbox rows persist in the profile's existing `state.db`. Identity includes
+provider, issuer and user ID. Each mailbox row contains an ID, UTC timestamp, session ID, message,
+read flag and monotonic cursor. An atomic `(user, message_id)` uniqueness check commits history
+before network delivery; identical repeats return `created: false`, conflicting reuse returns 409.
+Concurrent requests and restarts cannot start a second push batch for that message.
+
+Wake-ups contain only `{ "message_id": "event-id" }`, encrypted with `aes128gcm` and authenticated
+using VAPID. Each enrolled device has at most three attempts with exponential backoff and a
+ten-second timeout. Transport failures, 429 and 5xx retry; other 4xx and redirects never do.
+404/410 revoke only the failed subscription generation, preserving any concurrent replacement.
+A crash after the mailbox commit can lose a wake-up. An uncertain network response may cause
+duplicate delivery at the push provider within the retry budget; Web Push has no exactly-once
+receipt. The durable mailbox remains authoritative and no replay starts another delivery batch.
+
 ## Mailbox, push and device boundary
 
 The authenticated mailbox is authoritative. A mailbox write may cause the server to
@@ -85,7 +127,7 @@ VAPID private keys belong only to the push service's server-side secret store, w
 restricted service access, backup/rotation procedures and no logging. Only the VAPID
 public key goes to subscribing clients. Neither this connector nor browser/watch
 bundles hold the private key. Mailbox write tokens and device credentials remain
-separate from VAPID signing authority. This plugin sends no Web Push itself.
+separate from VAPID signing authority. The connector plugin sends no Web Push itself.
 
 ## What we do NOT claim
 
@@ -95,5 +137,5 @@ separate from VAPID signing authority. This plugin sends no Web Push itself.
 - No delivery guarantee from a 2xx push-service response.
 - No guarantee that mailbox acceptance means device receipt, display or reading.
 - No exactly-once delivery without server-side atomic idempotency enforcement.
-- No implemented watchOS client, push service, mailbox server or durable local outbox.
+- No implemented watchOS client or durable connector-side outbox.
 - No semantic proof that arbitrary text was never derived from private content.
