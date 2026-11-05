@@ -66,27 +66,32 @@ signed-in browser. That is the same gate
 `_ws_auth_ok` already enforces, so Talos Messaging needs no new auth path and
 gains nothing a dashboard tab does not already have.
 
-## Reaching a machine behind a NAT: the signaling relay
+## Reaching a machine behind a NAT: the relay bridge
 
 A phone on cellular cannot dial the agent's gateway: neither side has a routable
-address. Talos Messaging therefore pairs over a WebRTC data channel, and the
-**signaling relay** only introduces the two ends — it forwards SDP and ICE
-between one agent socket and one phone socket and then steps out of the way.
+address. Both dial *out* instead, to the public relay, which introduces them and
+then forwards frames between the two seats in the room.
 
-- The relay lives at `https://clud.bot/talos-messaging/signal/{room}?role=agent|phone`
-  (`clud.bot` is the public, WebSocket-capable host this project runs).
-  `talosbot.ai` is GitHub Pages — static, `POST` answers 405 and a WebSocket
-  upgrade is ignored — so the socket cannot terminate there; the static site
-  publishes `https://talosbot.ai/talos-messaging/signal.json` naming the
-  endpoint, and the app reads its endpoint from that document.
-- The room is `sha256(install_key)[:32]`, so dialing the room proves knowing the
-  key and the URL carries no credential of its own. The relay never sees the key.
-- Frames are opaque and capped at 32 KiB; nothing is parsed, logged or stored; a
-  room is reaped when both sides leave or after 300 idle seconds.
-- The agent side dials the relay from `hermes talos-messaging serve` (the same
-  key the install link carries), answers the offer, and exposes the gateway's
-  JSON-RPC over the data channel — so the phone's transport stays
-  `MessagingTransport`, with a WebRTC socket factory in place of `WebSocket`.
+The plan was a WebRTC data channel; the implementation is a plain WebSocket
+bridge, because the relay already forwards opaque JSON and a WebRTC stack would
+have added a second protocol (and a native dependency) to serve the same
+purpose. What ships:
+
+```
+phone  ⇄  relay (one agent seat, one phone seat)  ⇄  hermes talos-messaging serve  ⇄  gateway /api/ws
+```
+
+- Relay: `clud.bot/talos-messaging/signal/{room}?role=agent|phone`, published at
+  `https://talosbot.ai/talos-messaging/signal.json` (`talosbot.ai` itself is
+  GitHub Pages — static, no WebSocket — so it names the address rather than
+  terminating the socket).
+- Room: `sha256(messaging_key)[:32]`. Only someone holding this installation's
+  key can meet the bridge there, and the relay never sees the key.
+- `hermes talos-messaging serve` holds the agent seat, mints a gateway ticket
+  from that same key, and forwards frames verbatim in both directions. It parses
+  nothing, logs no payload, and reconnects with backoff when the relay drops.
+- The relay's own `peer_joined` / `peer_left` frames are housekeeping: the bridge
+  consumes them so the gateway never sees them.
 
 ## The key and the install link
 

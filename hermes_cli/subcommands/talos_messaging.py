@@ -17,6 +17,18 @@ def build_talos_messaging_parser(subparsers, *, cmd: Callable) -> None:
         "link that carries it, and can write a self-contained instructions page with "
         "pictures to send to the phone.")
     parser.add_argument(
+        "command", nargs="?", choices=["serve"], default=None,
+        help="`serve`: carry the phone's chat through the network from this machine "
+             "(dials the public relay as the agent)",
+    )
+    parser.add_argument(
+        "--relay", default=None,
+        help="Relay base URL for `serve` (default: the address published at "
+             "talosbot.ai/talos-messaging/signal.json)")
+    parser.add_argument(
+        "--gateway", default=None,
+        help="Local gateway base URL for `serve` (default: the Webapp's bind)")
+    parser.add_argument(
         "--print", action="store_true", dest="print_only",
         help="Print only the install link, for a script or a QR code")
     parser.add_argument(

@@ -229,11 +229,35 @@ def write_email(home: Path, link: str) -> Path:
     return path
 
 
+def _serve(home, args) -> int:
+    """``hermes talos-messaging serve``: bridge the phone's chat through the relay."""
+    from hermes_cli import talos_messaging_serve as bridge
+
+    token = read_token(home)
+    if token is None:
+        print_info("No Talos Messaging key yet; run `hermes talos-messaging` first.")
+        return 2
+    gateway = resolve_base_url(getattr(args, "gateway", None))
+    relay = _resolve_relay_sync(getattr(args, "relay", None), bridge)
+    room = bridge.room_for(token)
+    print_info(bridge.describe(relay, room, gateway))
+    print_info("Keep this running while you use the phone. Ctrl+C stops it.")
+    return bridge.run_forever(relay, room, gateway, token)
+
+
+def _resolve_relay_sync(explicit, module) -> str:
+    import asyncio
+
+    return asyncio.run(module.resolve_relay(explicit))
+
+
 def run(args) -> int:
     """``hermes talos-messaging``: mint, print, email, or revoke."""
     from hermes_cli.config import get_hermes_home
 
     home = get_hermes_home()
+    if getattr(args, "command", None) == "serve":
+        return _serve(home, args)
     if getattr(args, "revoke", False):
         if revoke_token(home):
             print_success("Talos Messaging key revoked. The app on the phone will ask for a new link.")
