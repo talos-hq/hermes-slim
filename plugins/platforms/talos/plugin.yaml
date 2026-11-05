@@ -1,0 +1,10 @@
+name: talos-platform
+label: Talos
+kind: platform
+version: 1.0.0
+description: Explicit outbound notifications to the Talos authoritative mailbox.
+requires_env:
+  - name: TALOS_API_TOKEN
+    description: Mailbox write credential
+    prompt: Talos API token
+    password: true
