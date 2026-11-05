@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "icons": "python ../../scripts/generate_talos_messaging_icons.py",
     "preview": "vite preview",
     "typecheck": "tsc -b . --noEmit",
     "test": "vitest run",

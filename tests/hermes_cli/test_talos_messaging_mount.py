@@ -88,3 +88,26 @@ def test_the_default_dist_is_the_apps_build_output():
     assert TALOS_MESSAGING_DIST.name == "dist"
     assert TALOS_MESSAGING_DIST.parent.name == "talos-messaging"
     assert Path(TALOS_MESSAGING_DIST).is_absolute()
+
+def test_every_icon_the_pages_reference_exists_in_the_source_tree():
+    """A home-screen app with a missing icon silently becomes a screenshot.
+
+    The dist is a build artifact, so this checks the *sources* Vite copies:
+    every ``icons[].src`` in the manifest and every ``apple-touch-icon`` in
+    index.html must exist under ``public/``.
+    """
+    import json
+    import re
+
+    from hermes_cli.web_server_talos_messaging import TALOS_MESSAGING_DIST
+
+    app_root = TALOS_MESSAGING_DIST.parent
+    public = app_root / "public"
+    manifest = json.loads((public / "manifest.webmanifest").read_text(encoding="utf-8"))
+    referenced = [icon["src"] for icon in manifest["icons"]]
+    index = (app_root / "index.html").read_text(encoding="utf-8")
+    referenced += re.findall(r'rel="apple-touch-icon" href="([^"]+)"', index)
+    assert referenced, "no icons referenced at all"
+    for src in referenced:
+        relative = src.removeprefix("/talos/")
+        assert (public / relative).is_file(), f"missing icon source: {relative}"

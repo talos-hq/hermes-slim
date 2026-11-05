@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Talos Messaging">
+  <!-- Talos Messaging: the Talos "T" struck in bronze inside the broken ring.
+       Maskable-safe: every mark sits inside the middle 80% of the canvas. -->
+  <rect width="512" height="512" fill="#0B0D10"/>
+  <circle cx="256" cy="248" r="150" fill="none" stroke="#C89B63" stroke-width="14"
+          stroke-linecap="round" stroke-dasharray="828 114" transform="rotate(118 256 248)"/>
+  <circle cx="256" cy="248" r="128" fill="none" stroke="#C89B63" stroke-width="4" opacity="0.5"/>
+  <g>
+    <path d="M168 152h176v44h-66v188h-44V196h-66z" fill="#E4C89A"/>
+    <path d="M180 164h152" stroke="#F7E4C2" stroke-width="6" opacity="0.35"/>
+  </g>
+</svg>
