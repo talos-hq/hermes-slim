@@ -69,3 +69,96 @@ The benchmark runs the same fixed task through `AIAgent` with integration off/on
 scripted model. It reports actual prompt characters, model tool calls and real CLI search
 latency. Model token usage is unavailable. It measures integration overhead and prompt
 growth, not a reduction in live model tool calls or improvement in task success.
+
+
+## Live bounded A/B results (2026-11-05)
+
+The fixed experiment used OpenRouter `deepseek/deepseek-v4.1-flash-1017`,
+temperature 0, three independent trials per arm per task (18 sessions), 45 seconds
+per session, at most three model calls and 256 completion tokens per call.
+The tasks were fixed after searching the existing 51-entry brain, before seeing
+any model results. Searches for cmake and signing returned no matches; those tasks
+were not selected. The selected knowledge concerned soldr PY-003, himalaya SMTP,
+and the existing multiplexed Telegram gateway.
+
+Every session ran in a fresh worker with a fresh `HERMES_HOME` and
+`HERMES_BRAIN_DIR`. ON was seeded with a frozen set of relevant existing entries
+plus an explicit, manually seeded PY-003 failure lesson; OFF used a genuinely
+empty brain directory, with the integration enabled in both arms. Both received
+the same task prompt, tool schema, model, limits and capture guidance. Trial order
+alternated OFF/ON and ON/OFF. No trial was discarded or rerun.
+
+This harness calls the production `agent.shared_brain.prepare_session` adapter,
+then a live OpenAI-compatible tool loop with a constrained `check` tool. It does
+**not** run the full `AIAgent` terminal loop. The tool writes `candidate.json` and
+checks one of these explicit predicates:
+
+- **soldr:** reject `capture_output=True` with PY-003; accept file redirection only
+  after an actual Python subprocess exits successfully and its temporary stdout
+  file contains exactly `probe-ok`. This is a controlled policy trap, not execution
+  of soldr's full lint suite.
+- **smtp:** exact outgoing configuration: SMTP, `127.0.0.1:1025`, no encryption,
+  account `proton`. No mail is sent and no credentials are accessed by the task.
+- **gateway:** exact plan: `hermes-gateway.service`, multiplexing enabled,
+  no per-profile unit or host restart, channel enabled. No service is changed.
+
+All numeric cells below are **mean ± sample standard deviation**, N=3 per row.
+Tokens are actual provider-reported cumulative prompt/completion tokens across
+all calls in each session, including retries and recall. They are not character
+estimates. Wall time includes recall and the tool loop, excluding worker startup,
+credential resolution and seed creation. Zero tool calls means no candidate was
+submitted, not a successful task.
+
+| Task | Brain | Success | Input tokens | Output tokens | Tool calls | Wall ms | Known-bad runs |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| gateway | OFF | 0/3 | 552.7 ± 2.9 | 256.0 ± 0.0 | 0.0 ± 0.0 | 2557 ± 320 | 0/3 |
+| gateway | ON | 3/3 | 853.3 ± 2.9 | 164.0 ± 19.1 | 1.0 ± 0.0 | 1599 ± 334 | 0/3 |
+| smtp | OFF | 0/3 | 545.3 ± 16.1 | 256.0 ± 0.0 | 0.0 ± 0.0 | 3067 ± 1800 | 0/3 |
+| smtp | ON | 3/3 | 865.7 ± 2.9 | 218.0 ± 31.6 | 1.0 ± 0.0 | 1430 ± 227 | 0/3 |
+| soldr | OFF | 3/3 | 1279.7 ± 19.4 | 319.7 ± 101.6 | 2.0 ± 0.0 | 3774 ± 543 | 3/3 |
+| soldr | ON | 3/3 | 749.7 ± 2.9 | 88.3 ± 5.5 | 1.0 ± 0.0 | 1464 ± 609 | 0/3 |
+
+[Per-run receipt](./shared-brain-results/2026-11-05.json) contains all 18 outcomes,
+provider response IDs and reported usage/cost, candidates, hashes, and the fixed
+prompts and limits. Prompt transcripts and local source paths are omitted.
+Provider-reported total cost was **$0.003512799** (not an independent billing audit).
+
+**PROVEN within this experiment:** seeded recall improved bounded task success
+from 3/9 to 9/9. For PY-003, OFF repeated the known-bad approach in 3/3 sessions
+before correcting it; ON avoided it in 3/3. Both arms ultimately passed soldr
+(3/3 each), so that task had **no final-success improvement**. ON used one check
+instead of two and mean total tokens fell from 1599.3 to 838.0 (47.6%). This
+supports failure avoidance and token efficiency on this controlled task.
+
+**NOT PROVEN:** overall token reduction. SMTP and gateway ON inputs cost more;
+mean total tokens were 1083.7 versus 801.3 for SMTP, and 1017.3 versus 808.7 for
+gateway (ON versus OFF). OFF produced no tool call in any SMTP/gateway trial,
+consuming its 256 completion-token allowance. The success difference is therefore
+specific to this strict response budget; larger budgets could change the outcome.
+Across all tasks, mean total tokens were 979.7 ON versus 1069.8 OFF (8.4% lower),
+but this mixes solved and unsolved tasks and is not a general efficiency result.
+N=3 is descriptive evidence, not a significance claim; provider routing and
+caching were not controlled, and latency variance is reported rather than hidden.
+
+**NOT PROVEN:** autonomous self-learning (criterion 3), long-term retention,
+unseen-task generalization, real SMTP delivery, live gateway provisioning, or
+full-agent coding/build performance. The failure lesson was manually supplied;
+the harness does not demonstrate autonomous failure capture, lesson verification,
+and subsequent improvement. Criterion 2 is supported only for the controlled
+PY-003 trap. Criterion 4 has bounded task-level evidence, not universal proof.
+
+Reproduce with a prepared Hermes interpreter and configured provider credentials:
+
+```bash
+python scripts/shared_brain_ab.py --dry-run
+python scripts/shared_brain_ab.py --live --output .shared-brain-ab/new-run
+scripts/run_tests.sh tests/scripts/test_shared_brain_ab.py
+```
+
+Dry-run is the default and does not read the brain, resolve credentials, create
+artifacts, or call a model. Live execution writes a plan before trials and updates
+`results.json` after every session. Unknown usage stays null (serialized request
+and completion character counts remain available); failed sessions remain in the
+success denominator. Per-session stores prevent trial-to-trial learning or writes
+to the real brain. Treat raw local artifacts as potentially private and review
+before publishing. Adjust limits explicitly for a separate follow-up experiment.

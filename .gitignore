@@ -335,3 +335,6 @@ apps/desktop/.dist-build*
 
 # hermes-slim local bundles (bosn.toml)
 /.bosn-dist/
+
+# Live shared-brain A/B artifacts may contain private local recall.
+.shared-brain-ab/
