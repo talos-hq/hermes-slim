@@ -10,6 +10,7 @@ import time
 import pytest
 
 from pm import background
+from tests.waiting import wait_until
 from pm.package import InstallError
 
 _real_prefetch = background._prefetch
@@ -218,3 +219,50 @@ def test_unsupported_architecture_never_breaks_startup(world, monkeypatch):
     monkeypatch.setattr(background, "pending", unsupported)
     assert background.kick() is False
     background.watch_from_cli()
+
+
+def test_repair_during_a_long_backoff_starts_promptly(world, monkeypatch):
+    world.update({"node", "ffmpeg"})
+    background._update(lambda s: s.setdefault("packages", {}).update(
+        npm={"version": "1", "attempts": 3, "next_attempt": time.time() + 3600}))
+    _ensure_stub(monkeypatch, lambda name, **kw: world.add(name))
+    daemon = threading.Thread(target=background.run, daemon=True)
+    daemon.start()
+    wait_until(lambda: background._load().get("pid"), timeout=10)
+    background.repair(["npm"])
+    daemon.join(15)
+    assert not daemon.is_alive() and "npm" in world
+
+
+def test_deferred_install_still_records_which_checkout_owns_the_state(monkeypatch):
+    import argparse
+    import pm.background
+    import pm.cli
+    import pm.environments
+    import pm.install
+
+    recorded = []
+    monkeypatch.setattr(pm.cli, "_install_names", lambda names, target=None, *, verify=True: 0)
+    monkeypatch.setattr(pm.install, "sync_venv", lambda *a, **k: None)
+    monkeypatch.setattr(pm.install, "activate", lambda **k: [])
+    monkeypatch.setattr(pm.background, "allowed", lambda: True)
+    monkeypatch.setattr(pm.background, "kick", lambda: True)
+    monkeypatch.setattr(pm.environments, "record_activation_inputs", lambda *a, **k: recorded.append(a))
+    assert pm.cli.cmd_install(argparse.Namespace(names=None, extra=[], target=None, tools_only=False,
+                                                 defer_large=True)) == 0
+    assert recorded
+
+
+@pytest.mark.platforms("windows")
+def test_windows_daemon_breaks_away_from_the_update_job_or_falls_back(world, monkeypatch):
+    monkeypatch.undo()
+    flags = []
+
+    def popen(argv, **kwargs):
+        flags.append(kwargs["creationflags"])
+        if len(flags) == 1:
+            raise PermissionError("job forbids breakaway")
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    background._spawn()
+    assert flags[0] & subprocess.CREATE_BREAKAWAY_FROM_JOB and not flags[1] & subprocess.CREATE_BREAKAWAY_FROM_JOB

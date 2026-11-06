@@ -421,7 +421,7 @@ def cmd_install(args) -> int:
         kick()
         print("large tools (node, ffmpeg, chromium, ...) continue in the background: "
               "`hermes pm background status`", flush=True)
-    if full_closure and not failed and not defer_large:
+    if full_closure and not failed:
         from pm.environments import activation_inputs_dir, record_activation_inputs
 
         record_activation_inputs(activation_inputs_dir(repo_root()), input_mtimes, repo_root(),

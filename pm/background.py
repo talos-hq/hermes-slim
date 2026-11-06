@@ -295,7 +295,9 @@ def _next_wait(state: dict, names: list[str], now: float) -> float | None:
 
 def run() -> int:
     """The daemon. Exits when nothing is left that a retry could help."""
-    fd = lock_path(_directory() / "driver.lock", timeout=0)
+    # A grace period: daemon_running() probes hold this lock for an instant, and must not make a
+    # starting daemon conclude that another one is already at work.
+    fd = lock_path(_directory() / "driver.lock", timeout=1)
     if fd is None:
         return 0
     stop = threading.Event()
@@ -316,7 +318,8 @@ def run() -> int:
             delay = _next_wait(state, names, now)
             if delay is None:
                 break
-            stop.wait(delay)
+            # Short naps, so a repair or a fixed pin takes effect now and not after a long backoff.
+            stop.wait(min(delay, _CONTROL_POLL_SECONDS))
     finally:
         _update(lambda state: state.pop("pid", None))
         os.close(fd)
@@ -329,14 +332,21 @@ def _spawn() -> None:
     log = _directory() / "daemon.log"
     if log.is_file() and log.stat().st_size > _LOG_LIMIT_BYTES:
         log.unlink()
-    kwargs: dict = {"start_new_session": True}
-    if os.name == "nt":
-        kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-                  | subprocess.CREATE_NO_WINDOW}
-    with log.open("ab") as output:
-        subprocess.Popen([sys.executable, "-m", "pm.cli", "background", "run"], cwd=repo_root(),
-                         stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                         close_fds=True, **kwargs)
+    def popen(**kwargs):
+        with log.open("ab") as output:
+            subprocess.Popen([sys.executable, "-m", "pm.cli", "background", "run"], cwd=repo_root(),
+                             stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                             close_fds=True, **kwargs)
+
+    if os.name != "nt":
+        popen(start_new_session=True)
+        return
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    try:
+        # An update's tail runs in its kill-on-close job; the daemon must outlive that owner.
+        popen(creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+    except OSError:
+        popen(creationflags=flags)  # This job forbids breakaway; the next kick() restarts us if it dies.
 
 
 def kick() -> bool:
