@@ -24,8 +24,10 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -195,8 +197,23 @@ def wait_for_download(name: str, *, cancelled=None) -> None:
 
 # ── One package ──────────────────────────────────────────────────────────────────────────────────
 
-def _prefetch(name: str, stop: threading.Event) -> None:
-    """Fill the fetch cache without the store lock; the install then only unpacks and publishes."""
+def _reclaim_prefetch_scratch() -> None:
+    """A killed daemon's leftovers. Caller holds the driver lock, so none of these is live."""
+    from pm import paths
+
+    root = Path(paths.writable_store_root())
+    if root.is_dir():
+        for item in root.glob(".prefetch-*"):
+            shutil.rmtree(item, ignore_errors=True)
+
+
+def _prefetch(name: str, stop: threading.Event, repair: bool = False) -> None:
+    """Fill the fetch cache without the store lock; the install then only unpacks and publishes.
+
+    A repair verifies first, so damaged bytes are refetched here and not under the store lock. The
+    scratch is not ``Store.scratch``: ``pm gc`` removes ``.staging-*`` as a killed installer's, on
+    the rule that those only exist under the store lock this download does not hold.
+    """
     from pm.install import _installed_location, _lockfile
     from pm.registry import get_package, walk
     from pm.store import Store, current_target
@@ -214,12 +231,17 @@ def _prefetch(name: str, stop: threading.Event) -> None:
             _record(name, done=done, total=total)
 
     for package in walk([name]):
-        if getattr(package, "pin_only", False) or _installed_location(package, lockfile, target) is not None:
+        if (getattr(package, "pin_only", False)
+                or _installed_location(package, lockfile, target, verify=repair) is not None):
             continue
         artifacts = lockfile.artifacts(package.name, target)
         if artifacts:
-            with store.scratch() as scratch:
+            store.root.mkdir(parents=True, exist_ok=True)
+            scratch = Path(tempfile.mkdtemp(prefix=".prefetch-", dir=store.root))
+            try:
                 store.fetch_many(artifacts, scratch, progress=tick, pause_event=stop)
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _install_one(name: str, repair: bool, stop: threading.Event) -> None:
@@ -230,7 +252,7 @@ def _install_one(name: str, repair: bool, stop: threading.Event) -> None:
     _record(name, status="downloading", version=_version(name), done=0, total=0)
     try:
         with _package_lock(name):
-            _prefetch(name, stop)
+            _prefetch(name, stop, repair)
         _record(name, status="installing")
         # verify re-hashes what is recorded and re-realizes it on a mismatch: that IS the repair.
         ensure(name, explicit=True, verify=repair, pause_event=stop)
@@ -279,6 +301,7 @@ def run() -> int:
     stop = threading.Event()
     threading.Thread(target=_watch_pause, args=(stop,), daemon=True).start()  # health: allow HX012 -- machine-scoped, reads no profile state
     try:
+        _reclaim_prefetch_scratch()
         _update(lambda state: state.update(pid=os.getpid()))
         while not stop.is_set() and allowed():
             state = _load()
@@ -331,7 +354,7 @@ def kick() -> bool:
             return False
         _spawn()
         return True
-    except (OSError, ValueError, InstallError) as exc:
+    except (OSError, ValueError, RuntimeError, InstallError) as exc:
         print(f"background install did not start: {exc}", file=sys.stderr)
         return False
 
@@ -364,7 +387,7 @@ def watch_from_cli(interval: float = 30) -> None:
     kick()
     try:
         initial = pending() if allowed() else []
-    except (OSError, ValueError, InstallError):
+    except (OSError, ValueError, RuntimeError, InstallError):
         return  # kick() already reported it; startup must go on.
     if not initial:
         return
@@ -376,7 +399,7 @@ def watch_from_cli(interval: float = 30) -> None:
             time.sleep(interval)
             try:
                 tick()
-            except (OSError, ValueError, InstallError):
+            except (OSError, ValueError, RuntimeError, InstallError):
                 return
 
     threading.Thread(target=loop, daemon=True, name="pm-background-watch").start()  # health: allow HX012 -- machine-scoped PM state

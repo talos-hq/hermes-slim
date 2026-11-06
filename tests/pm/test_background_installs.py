@@ -12,6 +12,8 @@ import pytest
 from pm import background
 from pm.package import InstallError
 
+_real_prefetch = background._prefetch
+
 
 @pytest.fixture()
 def world(monkeypatch, tmp_path):
@@ -27,7 +29,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(background, "wanted", lambda: ["node", "npm", "ffmpeg"])
     monkeypatch.setattr(background, "allowed", lambda: True)
     monkeypatch.setattr(background, "_version", lambda name: "1")
-    monkeypatch.setattr(background, "_prefetch", lambda name, stop: None)
+    monkeypatch.setattr(background, "_prefetch", lambda name, stop, repair=False: None)
     monkeypatch.setattr(background, "_spawn", lambda: None)
     return installed
 
@@ -149,3 +151,70 @@ def test_only_one_daemon_and_a_killed_holder_frees_the_lock(world, monkeypatch):
 
 def test_status_is_json_serialisable(world):
     json.dumps(background.status())
+
+
+def test_repair_refetches_damaged_bytes_before_taking_the_store_lock(world, monkeypatch, tmp_path):
+    """Damaged but present: facts say installed, so only a verifying check sends it to the prefetch."""
+    import pm.install
+    import pm.registry
+    from pm import paths
+    from pm.store import Store
+
+    package = type("P", (), {"name": "ffmpeg"})()
+    monkeypatch.setattr(pm.registry, "walk", lambda names: [package])
+    monkeypatch.setattr(pm.install, "_installed_location",
+                        lambda p, l, t, verify=False: None if verify else object())
+    monkeypatch.setattr(pm.install, "_lockfile", lambda: type("L", (), {"artifacts": lambda self, n, t: [{"sha256": "x"}]})())
+    monkeypatch.setattr(paths, "writable_store_root", lambda: tmp_path / "store")
+    scratches = []
+    monkeypatch.setattr(Store, "fetch_many", lambda self, a, scratch, **kw: scratches.append(scratch))
+    _real_prefetch("ffmpeg", threading.Event())
+    assert not scratches  # An ordinary pass trusts facts.
+    _real_prefetch("ffmpeg", threading.Event(), True)
+    assert len(scratches) == 1
+    assert not scratches[0].name.startswith(".staging-")  # `pm gc` deletes those as abandoned.
+    assert not scratches[0].exists()
+
+
+def test_killed_daemons_scratch_is_reclaimed_on_next_run(world, monkeypatch, tmp_path):
+    from pm import paths
+
+    monkeypatch.setattr(paths, "writable_store_root", lambda: tmp_path / "store")
+    leftover = tmp_path / "store" / ".prefetch-dead"
+    leftover.mkdir(parents=True)
+    _ensure_stub(monkeypatch, lambda name, **kw: world.add(name))
+    background.run()
+    assert not leftover.exists()
+
+
+def test_update_defers_large_tools_when_the_worker_allows_and_keeps_them_when_it_cannot_say(monkeypatch):
+    import pm.client
+    import pm.install
+    import pm.libatomic
+
+    ensured = []
+    monkeypatch.setattr(pm.client, "is_runtime", lambda: False)
+    monkeypatch.setattr(pm.client, "ensure", lambda name, **kw: ensured.append(name))
+    monkeypatch.setattr(pm.libatomic, "install_before_lock", lambda: None)
+    monkeypatch.setattr(pm.install, "activate", lambda **kw: [])
+    monkeypatch.setattr(pm.client, "_request", lambda op, args: True)
+    pm.client.ensure_tools_for_sync()
+    assert ensured and "ffmpeg" not in ensured and "node" not in ensured
+
+    ensured.clear()
+
+    def unavailable(op, args):
+        raise InstallError("pm-runtime", "no runtime")
+
+    monkeypatch.setattr(pm.client, "_request", unavailable)
+    pm.client.ensure_tools_for_sync()
+    assert "ffmpeg" in ensured or "node" in ensured
+
+
+def test_unsupported_architecture_never_breaks_startup(world, monkeypatch):
+    def unsupported(state=None):
+        raise RuntimeError("unsupported architecture")
+
+    monkeypatch.setattr(background, "pending", unsupported)
+    assert background.kick() is False
+    background.watch_from_cli()
