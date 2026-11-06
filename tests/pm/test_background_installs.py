@@ -266,3 +266,18 @@ def test_windows_daemon_breaks_away_from_the_update_job_or_falls_back(world, mon
     monkeypatch.setattr(subprocess, "Popen", popen)
     background._spawn()
     assert flags[0] & subprocess.CREATE_BREAKAWAY_FROM_JOB and not flags[1] & subprocess.CREATE_BREAKAWAY_FROM_JOB
+
+
+def test_daemon_always_spawns_through_the_runtime_launch_contract(world, monkeypatch):
+    """launch.py is what installs OS trust and the generation lease; `-m pm.cli` skips both in a runtime."""
+    import pm.runtime
+
+    monkeypatch.undo()
+    spawned = {}
+    monkeypatch.setattr(pm.runtime, "runtime_command",
+                        lambda script, args, **kw: spawned.update(script=script.name, args=args, **kw) or ["py"])
+    monkeypatch.setattr(pm.runtime, "runtime_environment", lambda: {"K": "V"})
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: spawned.update(argv=argv, env=kw["env"]))
+    background._spawn()
+    assert spawned["script"] == "launch.py" and spawned["args"] == ["background", "run"]
+    assert spawned["bootstrap"] is False and spawned["argv"] == ["py"] and spawned["env"] == {"K": "V"}

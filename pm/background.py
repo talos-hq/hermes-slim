@@ -328,13 +328,19 @@ def run() -> int:
 
 def _spawn() -> None:
     from pm.paths import repo_root
+    from pm.runtime import runtime_command, runtime_environment
 
     log = _directory() / "daemon.log"
     if log.is_file() and log.stat().st_size > _LOG_LIMIT_BYTES:
         log.unlink()
+    # launch.py, whatever process spawns us: it installs OS trust before PM builds its HTTPS opener
+    # and leases the runtime generation, and a caller already inside the runtime would skip both.
+    # bootstrap=False: a startup kick must not build a runtime, and an install has one by now.
+    argv = runtime_command(Path(__file__).with_name("launch.py"), ["background", "run"], bootstrap=False)
+
     def popen(**kwargs):
         with log.open("ab") as output:
-            subprocess.Popen([sys.executable, "-m", "pm.cli", "background", "run"], cwd=repo_root(),
+            subprocess.Popen(argv, cwd=repo_root(), env=runtime_environment(),
                              stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
                              close_fds=True, **kwargs)
 
