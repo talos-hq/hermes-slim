@@ -4488,12 +4488,11 @@ def _start_gateway_housekeeping(
     Cadences are ticks of ``interval``; inner gates own the real cadence."""
     from gateway.run_delivery_queue_watch import DRAIN_LABEL, DeliveryQueueWatch, wait_for_next_tick
     from gateway.run_profile_reconcile import _mcp_config_reconciler, profile_scoped_chore
-    from gateway.run_housekeeping_disk import housekeeping_media_caches, maybe_post_auto_prune_prompt
+    from gateway.run_housekeeping_disk import housekeeping_background_installs, housekeeping_media_caches, maybe_post_auto_prune_prompt
     chores: list[tuple[int, str, Any]] = [
-        # First every tick: re-stamp ``updated_at`` in gateway_state.json so it is a real heartbeat.
-        # ``hermes gateway status`` / ``/api/status`` warn when it ages past 2x ``interval`` with the
-        # PID alive — the thread (or a chore blocked on the loop) wedged (#113372). Runs first so a
-        # wedged chore stops the NEXT stamp instead of a slow one delaying this tick's.
+        # First every tick: re-stamp ``updated_at`` in gateway_state.json so it is a real heartbeat;
+        # status warns when it ages past 2x ``interval`` with the PID alive: a wedged thread (#113372).
+        # Runs first so a wedged chore stops the NEXT stamp instead of a slow one delaying this tick's.
         (1, "Runtime heartbeat", _write_runtime_status_quiet)]
     if adapters is not None or runner is not None:
         # Restart-safe cron workers run outside the gateway cgroup and queue their final send for
@@ -4525,6 +4524,7 @@ def _start_gateway_housekeeping(
         # profile's own (get_hermes_home()/load_config_readonly() bind to the scope).
         (1, "Plugin update check", profile_scoped_chore(runner, _housekeeping_plugin_update_check)),
         (1, "Deferred FTS retry tick", _housekeeping_deferred_fts_retry),
+        (1, "Background tool installs", housekeeping_background_installs),
         (1, "gateway housekeeping memory trim", _housekeeping_memory_trim),
         (1, "MCP config reconcile", _mcp_config_reconciler(runner)),
         # Last: a real prune can hold this thread for a while; every other chore of the tick runs first.

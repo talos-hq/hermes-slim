@@ -29,3 +29,11 @@ may move a transitive core package within core's declared ranges
 (`tests/pm/test_workspace_build_inputs.py::test_plugin_can_move_compatible_transitive_but_not_exact_requirement`).
 Plugin `python_dependencies` follow the plugin's own policy. Teknium's rulings: "plugins dont have to abide by our 14 day rule … Only hermes'
 dependencies themselves have to"; dates are checked by us, not users; pinned deps need >3 days.
+
+## Background installs
+
+`Package.background` tools (node, npm, ffmpeg, chromium, cua-driver) are the daemon's on installs and
+updates: `pm/background.py`, `hermes pm background status|start|stop|repair`. Pending is derived from
+lockfile + facts; never add a queue that must stay in sync with them. The daemon downloads with the
+package lock and WITHOUT the store lock, and never holds both, so a foreground `ensure` holding the
+store lock can safely wait for it. Bare `hermes pm install` stays foreground for shells, CI and images.

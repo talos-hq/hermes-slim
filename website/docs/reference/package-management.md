@@ -621,3 +621,21 @@ without upload times, it stops with `has no publish time`; use
 - **Interrupted dependency install:** startup requests the same PM repair before dependency activation. Automatic attempts are bounded; `pm repair` retries explicitly. A failed repair preserves the previous selection and its retry marker.
 - **Damaged Python executable or application source:** repair or reinstall through the package owner. PM cannot run without those files. Signed payload files are never modified by dependency repair.
 - **Unknown package or extra:** use the declared name. `pm install` takes package names, not Python extra names or pip specifications.
+
+## Background installs
+
+Node, npm, FFmpeg, Chromium and cua-driver are large, so the installers and `hermes update` hand them to a
+detached daemon and finish without waiting. Hermes starts the daemon again from the gateway and from CLI
+startup, so it survives reboots. A tool that is needed sooner still installs on demand and joins a download
+already in progress instead of repeating it. Bare `hermes pm install` stays in the foreground; pass
+`--defer-large` to defer. Sealed payloads, and `security.allow_lazy_installs: false`, never defer.
+
+| Command | Effect |
+|---|---|
+| `hermes pm background status [--json]` | Pending packages, progress, attempts and the last error |
+| `hermes pm background stop` | Stop and stay stopped; partial downloads are kept |
+| `hermes pm background start` | Resume |
+| `hermes pm background repair [NAME...] [--fresh]` | Forget failures, re-verify installed bytes and reinstall what is damaged; `--fresh` also discards downloaded bytes |
+
+Failed downloads back off from one minute to one hour. After 8 attempts a package stays failed until `repair`
+or an explicit `hermes pm install NAME`. Logs are in `cache/partials/.background/daemon.log` under the Hermes root.

@@ -44,11 +44,11 @@ def test_cua_refresh_skips_disabled_missing_or_external_driver(
 
 
 @pytest.mark.platforms("linux")
-def test_linux_refresh_reconciles_installed_pin(refresh):
+def test_linux_refresh_leaves_a_new_pin_to_the_background_daemon(refresh):
     lookup, ensure = refresh
     update._refresh_cua_driver_after_update()
     lookup.assert_called_once_with("cua-driver", allow_outdated=True)
-    ensure.assert_called_once_with("cua-driver", explicit=True)
+    ensure.assert_not_called()  # An update never waits on this download.
 
 
 @pytest.mark.platforms("windows")

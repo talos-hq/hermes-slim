@@ -878,44 +878,26 @@ def _refresh_cua_driver_after_update() -> None:
         print("\n→ Windows cua-driver refresh deferred (autostart registration requires UAC).")
         print("  Run `hermes computer-use install --upgrade` in an interactive terminal.")
         return
-    print("\n→ Preparing pinned cua-driver (Computer Use)...")
     if sys.platform == "darwin":
+        print("\n→ Preparing pinned cua-driver (Computer Use)...")
         # PM preserves the signed app; setup validates and registers its new path
         # with LaunchServices. This path never requests permissions or elevation.
         from hermes_cli.tools_config_cua import install_cua_driver
         install_cua_driver(show_installer_progress=False)
-    else:
-        pm.ensure("cua-driver", explicit=True)
+    # Elsewhere a new pin is the background daemon's: _install_default_tools_after_update starts it.
 
 
 def _install_default_tools_after_update() -> None:
-    """Give the install its optional default tools: the PM defaults (Chromium,
-    cua-driver). browser_exec's engine (browser-harness) is a venv dependency.
+    """Hand the large tools to the background daemon (pm/background.py).
 
-    Runs at the end of both the installers (via the source completion) and
-    ``hermes update``: a source update re-syncs only the venv, so a tool that became
-    a default after this install was created would never arrive otherwise. Declined
-    packages stay declined (pm/defaults.py). A failed download warns and never fails.
+    Runs at the end of both the installers (via the source completion) and ``hermes update``,
+    which therefore never wait on a Chromium download. It stays off for sealed payloads and
+    under the lazy-install policy; declined packages stay declined (pm/defaults.py).
     """
-    import pm
-    from pm.defaults import default_packages
-    from pm.install import lazy_installs_allowed, sealed
-    from pm.lock import Lockfile
-    from pm.paths import lockfile_path
+    from pm.background import kick, pending
 
-    # Sealed payloads ship their tools; the lazy-install policy (config or the
-    # Docker/test bridge) means the user asked Hermes not to fetch on its own.
-    if sealed() or not lazy_installs_allowed():
-        return
-    for name in default_packages(Lockfile(lockfile_path()).names()):
-        if pm.installed_package(name) is not None:
-            continue
-        print(f"\n→ Installing {name} (default tool; opt out with `hermes pm install --without {name}`)...")
-        try:
-            pm.ensure(name, explicit=True)
-        except (pm.InstallError, OSError) as exc:
-            print(f"  ⚠ {name} was not installed: {exc}")
-            print(f"    Retry with: hermes pm install {name}")
+    if kick():
+        print(f"\n→ Installing in the background: {', '.join(pending())} (`hermes pm background status`)")
 
 
 def _print_checkpoint_footprint_notice() -> None:

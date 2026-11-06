@@ -196,6 +196,9 @@ def _recover_update_debts_on_startup() -> None:
             _warn_pending_fleet_restart_on_startup()
         except Exception:  # a startup warning never blocks the launch it warns about
             logger.debug("pending fleet restart check failed", exc_info=True)
+        from pm.background import watch_from_cli
+
+        watch_from_cli()  # resume large tool installs a reboot interrupted; never blocks
     from hermes_cli.update_pause_record import recover as _recover_paused_gateways
     # Unconditional: recover() itself skips the PARSED `update`/`gateway run` commands; a raw argv
     # value equal to "update" (`--resume update`) is no reason to strand paused gateways.

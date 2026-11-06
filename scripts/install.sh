@@ -1029,6 +1029,10 @@ bootstrap_pm() {
     [ "$SKIP_BROWSER" = true ] && pm_args+=(--without agent-browser)
     [ "$SKIP_COMPUTER_USE" = true ] && pm_args+=(--without cua-driver)
     bootstrap_python
+    # The stable PM this script may install predates the flag and would reject it.
+    if (cd "$INSTALL_DIR" && "$boot_py" -m pm.cli install --help 2>/dev/null | grep -q -- --defer-large); then
+        pm_args+=(--defer-large)
+    fi
     # Refresh the sudo ticket cached in prerequisites (never prompts): the
     # clone and downloads can outlast sudo's timestamp_timeout.
     if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then sudo -n -v 2>/dev/null || :; fi

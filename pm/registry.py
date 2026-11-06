@@ -50,7 +50,7 @@ def all_packages() -> list[str]:
     return sorted(_builtins_loaded())
 
 
-def source_install_packages(names: list[str]) -> list[str]:
+def source_install_packages(names: list[str], *, include_background: bool = True) -> list[str]:
     """Select supported runtime roots; internal tools enter only through dependencies."""
     from pm.store import current_target
 
@@ -58,12 +58,13 @@ def source_install_packages(names: list[str]) -> list[str]:
     return [name for name in names
             if not get_package(name).internal
             and (name == "python" or not get_package(name).optional)
-            and get_package(name).missing_reason(target) is None]
+            and get_package(name).missing_reason(target) is None
+            and (include_background or not get_package(name).background)]
 
 
-def tool_roots(names: list[str]) -> list[str]:
+def tool_roots(names: list[str], *, include_background: bool = True) -> list[str]:
     """Packages to publish before a venv sync. The venv is not one of them."""
-    return [name for name in source_install_packages(names) if not isinstance(get_package(name), StatePackage)]
+    return [name for name in source_install_packages(names, include_background=include_background) if not isinstance(get_package(name), StatePackage)]
 
 
 def package_definitions(names: list[str] | None = None) -> list[dict[str, Any]]:

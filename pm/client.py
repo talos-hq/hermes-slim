@@ -244,6 +244,19 @@ def sync_venv(extras=None, *, explicit=False, plugins: PluginInput | None = None
                           "evict_incompatible_plugins": evict_incompatible_plugins}, project_root=project_root)
 
 
+def _may_defer_large() -> bool:
+    """Ask a process that can read config: updates reach here on a bare ``-I -S`` interpreter, where
+    the policy read fails closed on the missing YAML parser and would mean "the user forbids it"."""
+    if is_runtime():
+        from pm.background import allowed
+
+        return allowed()
+    try:
+        return bool(_request("allowed", {}))
+    except InstallError:
+        return False  # Without an answer, keep the foreground guarantee.
+
+
 def ensure_tools_for_sync() -> None:
     """Publish every required tool in this tree's lockfile, then put them on PATH.
 
@@ -261,7 +274,8 @@ def ensure_tools_for_sync() -> None:
     from pm.registry import tool_roots
 
     install_before_lock()
-    for name in tool_roots(Lockfile(paths.lockfile_path()).names()):
+    # Large tools are the daemon's (update_cmd_maint starts it); what a build needs, it ensures itself.
+    for name in tool_roots(Lockfile(paths.lockfile_path()).names(), include_background=not _may_defer_large()):
         ensure(name, explicit=True)
     problems = activate(allow_incomplete=True)
     if problems:

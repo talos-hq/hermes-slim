@@ -596,6 +596,13 @@ def ensure(
     target = current_target()
     chain = walk([name])
     checked = _operation.checked if _operation is not None else set()
+    # Before the store lock, so other PM work is not blocked behind this wait. Safe even when the
+    # operation already holds it: the daemon never wants the store lock while downloading.
+    from pm.background import wait_for_download
+
+    for package in chain:
+        if package.background and _installed_location(package, lockfile, target) is None:
+            wait_for_download(package.name, cancelled=pause_event.is_set if pause_event is not None else None)
     if _operation is not None:
         _operation.lock()
     missing = []
@@ -927,7 +934,7 @@ def drift(*, include_venv: bool = True) -> dict[str, str]:
             package = get_package(name)
         except KeyError:
             continue
-        if package.optional or package.internal:
+        if package.optional or package.internal or (package.background and not sealed()):
             continue
         if package.missing_reason(target) is not None:
             continue

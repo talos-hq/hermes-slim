@@ -22,6 +22,7 @@ class Operation:
 
 OPERATIONS = {
     "ensure": Operation("pm.install", None, "state"),
+    "allowed": Operation("pm.background", (), "always"),
     "stage_only": Operation("pm.install", None, "always"),
     "stage_tools": Operation("pm.build_operations", None, "never"),
     "prepare_tools": Operation("pm.build_operations", None, "always"),
