@@ -261,7 +261,10 @@ def ensure_tools_for_sync() -> None:
     from pm.registry import tool_roots
 
     install_before_lock()
-    for name in tool_roots(Lockfile(paths.lockfile_path()).names()):
+    from pm.background import allowed
+
+    # Large tools are the daemon's (update_cmd_maint starts it); what a build needs, it ensures itself.
+    for name in tool_roots(Lockfile(paths.lockfile_path()).names(), include_background=not allowed()):
         ensure(name, explicit=True)
     problems = activate(allow_incomplete=True)
     if problems:

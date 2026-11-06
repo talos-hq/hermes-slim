@@ -17,6 +17,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def housekeeping_background_installs() -> None:
+    """Machine-scoped, so not a per-profile chore: resume large tool installs and refresh PATH."""
+    from pm.background import tick
+
+    tick()
+
+
 def housekeeping_media_caches() -> None:
     """Hourly media-cache prune (24h max age); spillover (None) keeps the session retention window."""
     from gateway.platforms.base import (

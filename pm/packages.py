@@ -530,6 +530,7 @@ class Nodejs(_BionicDebArm, BinaryPackage, DebPackage):
     the Termux main-repo nodejs .deb for bionic (same major line, termux-built)."""
 
     name = "node"
+    background = True
     binary_rel = {"win32": "node.exe", "posix": "bin/node"}
     # The staged .deb's main binary: DebPackage.verify checks it.
     main_bin_rel = "bin/node"
@@ -623,6 +624,7 @@ def npm_env(cache_dir: Path, base_env: Optional[dict] = None) -> dict[str, str]:
 @register
 class Npm(BinaryPackage):
     name = "npm"
+    background = True
     deps = ("node",)
     binary_rel = {"win32": "npm.cmd", "posix": "bin/npm"}
     flatten = False
@@ -837,6 +839,7 @@ class Ffmpeg(_BionicDebArm, BinaryPackage, DebPackage):
     x11grab is how screen capture on X11 works."""
 
     name = "ffmpeg"
+    background = True
     deb_package = "ffmpeg"
     optional = False
     gaps = {target: "BtbN Linux builds link glibc dynamically" for target in MUSL_TARGETS}
@@ -943,6 +946,7 @@ class Ripgrep(BinaryPackage):
 @register
 class CuaDriver(BinaryPackage):
     name = "cua-driver"
+    background = True
     optional = True
     # Computer use's only OS path, so the default install carries it.
     default = True
@@ -1007,6 +1011,7 @@ class Chromium(Package):
     is all playwright's resolver reads."""
 
     name = "chromium"
+    background = True
     optional = True
     # browser_exec's launcher drives this build, and its readiness check
     # installs it only once per process, so default-install it like the

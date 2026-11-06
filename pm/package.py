@@ -64,6 +64,8 @@ class Package:
         and never selected as an application root. Dependencies and explicit
         build requests can select it. node/npm are shipped runtime tools
         (TUI, plugins), not install machinery.
+    background: large enough that updates and `pm install --defer-large` leave it to the
+        daemon (pm/background.py). Its absence is not drift outside sealed payloads.
     on_path: contributes PATH dirs.
     url: template with {version} and {target} holes. override fetch_url()
         when a platform needs a completely different url.
@@ -76,6 +78,7 @@ class Package:
     optional: bool = False
     default: bool = False
     internal: bool = False
+    background: bool = False
     on_path: bool = True
     url: str = ""
     gaps: dict[str, str] = {}

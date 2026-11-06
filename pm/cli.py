@@ -358,7 +358,17 @@ def cmd_install(args) -> int:
     if error:
         print(f"✗ {error}")
         return 1
-    names = args.names if args.names or extras else source_install_packages(_lockfile().names())
+    defer_large = bool(getattr(args, "defer_large", False))
+    if defer_large and (args.names or extras or cross_target or tools_only or test_environment is not None):
+        print("✗ --defer-large shapes the default closure; it takes no names, --extra, --target, "
+              "--tools-only or --test-environment")
+        return 1
+    if defer_large:
+        from pm.background import allowed
+
+        defer_large = allowed()
+    names = (args.names if args.names or extras
+             else source_install_packages(_lockfile().names(), include_background=not defer_large))
     without = list(dict.fromkeys(getattr(args, "without", None) or ()))
     if without:
         from pm.defaults import record_declined
@@ -370,7 +380,7 @@ def cmd_install(args) -> int:
     if not (args.names or extras):
         from pm.defaults import default_packages
 
-        defaults = default_packages(_lockfile().names())
+        defaults = [] if defer_large else default_packages(_lockfile().names())
     # Only the whole default closure verifies everything an activated shell
     # composes from, so only it advances the prologue's input stamps.
     full_closure = not (args.names or tools_only or cross_target)
@@ -405,7 +415,13 @@ def cmd_install(args) -> int:
     # only once the venv, and on Windows ARM64 its build tools, succeeded.
     if not failed:
         _install_defaults(defaults, verify=not trust_recorded)
-    if full_closure and not failed:
+    if defer_large and not failed:
+        from pm.background import kick
+
+        kick()
+        print("large tools (node, ffmpeg, chromium, ...) continue in the background: "
+              "`hermes pm background status`", flush=True)
+    if full_closure and not failed and not defer_large:
         from pm.environments import activation_inputs_dir, record_activation_inputs
 
         record_activation_inputs(activation_inputs_dir(repo_root()), input_mtimes, repo_root(),
@@ -440,7 +456,7 @@ def cmd_doctor(args) -> int:
             continue
         facts, store = _installed_location(package, lockfile, target) or (_facts(), _store())
         fact = facts.get(name)
-        soft = package.optional or package.internal
+        soft = package.optional or package.internal or package.background
         identity = _identity(lockfile, name, target)
         if (
             fact is not None
@@ -955,6 +971,8 @@ def main(argv=None) -> int:
     p.add_argument("--without", action="append", default=[], metavar="NAME",
                    help="leave an optional default package (chromium, cua-driver) out of this and every later "
                         "default install and update; `hermes pm install NAME` opts back in (repeatable)")
+    p.add_argument("--defer-large", action="store_true",
+                   help="leave large tools (node, npm, ffmpeg, chromium, cua-driver) to the background daemon")
     p.add_argument("--tools-only", action="store_true",
                    help="install the tool closure, put it on PATH, and stop before the venv sync")
     p.add_argument("--trust-recorded", action="store_true",
@@ -1019,6 +1037,9 @@ def main(argv=None) -> int:
                         "table + the bionic lock rows); --check reports without writing")
     p.set_defaults(func=cmd_update)
 
+    from pm.background import add_parser as add_background_parser
+
+    add_background_parser(sub)
     args = parser.parse_args(argv)
     if args.cmd == "lock" and (args.name is None) != (args.version is None):
         lock_parser.error("--bump NAME and VERSION go together; run with neither to relock uv.lock")

@@ -1290,6 +1290,8 @@ function Invoke-BootstrapPm {
         # default rejects 'chromium', and newer PMs read 'agent-browser' as 'chromium'.
         if ($SkipBrowser) { $pmArgs += @('--without', 'agent-browser') }
         if ($SkipComputerUse) { $pmArgs += @('--without', 'cua-driver') }
+        # The stable PM this script may install predates the flag and would reject it.
+        if ((& $bootPy -m pm.cli install --help 2>$null | Out-String) -match '--defer-large') { $pmArgs += '--defer-large' }
         Invoke-Logged "Installing dependencies (hash-verified via uv.lock)" { & $bootPy -m pm.cli @pmArgs }
         if ($LASTEXITCODE) { Fail "dependency install failed" deps_install_failed }
     } finally {
