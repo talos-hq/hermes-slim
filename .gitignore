@@ -338,3 +338,5 @@ apps/desktop/.dist-build*
 
 # Live shared-brain A/B artifacts may contain private local recall.
 .shared-brain-ab/
+.clud/loop
+LOOP_DONE.md
