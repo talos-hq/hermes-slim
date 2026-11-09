@@ -68,7 +68,8 @@ jobs:
 
   pkg:
     needs: bundle
-    runs-on: blacksmith-12vcpu-macos-latest
+    # Package assembly and signing do not require an ARM64 host.
+    runs-on: macos-15-intel
     environment: release-signing
     timeout-minutes: 60
     defaults: { run: { shell: bash } }
@@ -120,7 +121,6 @@ jobs:
       - name: Build universal package
         run: |
           uname -m
-          test "$(uname -m)" = arm64
           sh slim/macos/build_pkg.sh dist "$RUNNER_TEMP/Hermes-Slim.pkg"
           mkdir out
           mv "$RUNNER_TEMP/Hermes-Slim.pkg" out/
