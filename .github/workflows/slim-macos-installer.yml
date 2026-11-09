@@ -35,7 +35,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: darwin-arm64, os: blacksmith-12vcpu-macos-latest }
+          - { target: darwin-arm64, os: macos-15 }
           - { target: darwin-x64, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -136,7 +136,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: blacksmith-12vcpu-macos-latest, arch: arm64, target: darwin-arm64 }
+          - { os: macos-15, arch: arm64, target: darwin-arm64 }
           - { os: macos-15-intel, arch: x86_64, target: darwin-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

@@ -16,8 +16,8 @@ import os
 import subprocess
 import sys
 
-# GitHub's hosted ARM pool starves this repo; use the organization's Apple Silicon pool.
-DEFAULT_ARM_IMAGE = "blacksmith-12vcpu-macos-latest"
+# Pin the native ARM64 image; runner allocation can take tens of minutes.
+DEFAULT_ARM_IMAGE = "macos-15"
 OPT_IN_LABEL = "ci:bundle-macos"
 NOT_ACQUIRED = "not acquired by Runner"
 
