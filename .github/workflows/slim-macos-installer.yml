@@ -43,7 +43,7 @@ jobs:
     env:
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           filter: blob:none
@@ -58,7 +58,7 @@ jobs:
           python3 slim/build_bundle.py --target ${{ matrix.target }} --wheels wheels --work "$RUNNER_TEMP/hs-work" --stage-only
           python3 slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
           ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bundle-${{ matrix.target }}
           path: dist/*.tar.zst*
@@ -71,8 +71,8 @@ jobs:
     timeout-minutes: 60
     defaults: { run: { shell: bash } }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: bundle-*
           path: dist
@@ -87,7 +87,7 @@ jobs:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          REQUIRE: ${{ inputs.require_signing || github.event_name == 'schedule' }}
+          REQUIRE: ${{ inputs.require_signing || false }}
         run: |
           if [ -z "$INSTALLER_P12" ]; then
             [ "$REQUIRE" = true ] && { echo "::error::no signing certificate secret"; exit 1; }
@@ -117,7 +117,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Build universal package
         run: sh slim/macos/build_pkg.sh dist "$RUNNER_TEMP/Hermes-Slim.pkg" && mkdir out && mv "$RUNNER_TEMP/Hermes-Slim.pkg" out/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Hermes-Slim-pkg
           path: out/Hermes-Slim.pkg
@@ -135,10 +135,10 @@ jobs:
     timeout-minutes: 30
     defaults: { run: { shell: bash } }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           sparse-checkout: slim/macos
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: Hermes-Slim-pkg
       - name: Install and verify

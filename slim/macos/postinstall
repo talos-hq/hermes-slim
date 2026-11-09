@@ -19,7 +19,7 @@ fi
 user="${SUDO_USER:-}"
 [ -n "$user" ] && [ "$user" != root ] || user="$(stat -f %Su /dev/console)"
 [ -n "$user" ] && [ "$user" != root ] || { echo "no non-root user to install for"; exit 1; }
-home="$(dscl . -read "/Users/$user" NFSHomeDirectory | awk '{print $2}')"
+home="$(dscl . -read "/Users/$user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')"
 
 archive="$(ls "$here"/bundles/hermes-slim-*-"$target".tar.zst | head -1)"
 echo "user=$user home=$home target=$target archive=$archive"
