@@ -1,0 +1,5 @@
+Hermes is installed. Open a new Terminal window and run:
+
+    hermes-slim-setup
+
+to connect a model provider and start the gateway. Install log: /var/log/hermes-slim-install.log

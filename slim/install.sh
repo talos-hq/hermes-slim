@@ -1,10 +1,13 @@
 #!/bin/sh
 # hermes-slim installer for macOS and Linux (glibc or musl).
 #
-#   sh install.sh [--version vX.Y.Z | --archive FILE] [--dir ~/.hermes-slim] [--upgrade] [-- <hermes-slim-setup args>]
+#   sh install.sh [--version vX.Y.Z | --archive FILE] [--dir ~/.hermes-slim] [--upgrade] [--no-setup] [-- <hermes-slim-setup args>]
 #
 # --upgrade (what `hermes update` runs) keeps the existing configuration and only
 # restarts the gateway; without it, setup asks for (or takes) every value.
+#
+# --no-setup stops after linking `hermes` (the macOS .pkg uses it: an installer has
+# no terminal to prompt on, so the user runs hermes-slim-setup afterwards).
 #
 # --archive installs a bundle already on disk (offline installs, CI); its
 # FILE.sha256 is checked when present.
@@ -18,6 +21,7 @@ repo="talos-hq/hermes-slim"
 version="latest"
 archive=""
 upgrade=false
+setup=true
 dir="${HERMES_SLIM_DIR:-$HOME/.hermes-slim}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -25,6 +29,7 @@ while [ $# -gt 0 ]; do
     --dir) dir="$2"; shift 2 ;;
     --archive) archive="$2"; shift 2 ;;
     --upgrade) upgrade=true; shift ;;
+    --no-setup) setup=false; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -150,6 +155,8 @@ case ":$PATH:" in
     echo "  added ~/.local/bin to PATH for new shells; in this one run: export PATH=\"\$HOME/.local/bin:\$PATH\""
     ;;
 esac
+
+[ "$setup" = true ] || exit 0
 
 # `curl ... | sh`: stdin is this script, so setup would see no terminal and refuse to
 # prompt. Give it the terminal the user is sitting at, when there is one.
