@@ -10,7 +10,7 @@ step "T1 host is the expected architecture"
 [ "$(uname -m)" = "$EXPECT_ARCH" ] || fail "runner is $(uname -m), expected $EXPECT_ARCH"
 
 step "T2 package declares both architectures"
-pkgutil --expand "$pkg" "$RUNNER_TEMP/expanded"
+pkgutil --expand-full "$pkg" "$RUNNER_TEMP/expanded"
 grep -q 'hostArchitectures="arm64,x86_64"' "$RUNNER_TEMP/expanded/Distribution" || fail "Distribution lacks hostArchitectures"
 for t in darwin-arm64 darwin-x64; do
   ls "$RUNNER_TEMP"/expanded/*.pkg/Scripts/bundles/hermes-slim-*-"$t".tar.zst >/dev/null || fail "package lacks the $t bundle"
@@ -18,10 +18,9 @@ done
 
 step "T3 signature (signed builds only)"
 if pkgutil --check-signature "$pkg"; then
-  if pkgutil --check-signature "$pkg" | grep -q "Developer ID Installer"; then
-    spctl --assess --type install -vv "$pkg" || fail "Gatekeeper rejects the signed package"
-    xcrun stapler validate "$pkg" || fail "notarization ticket not stapled"
-  fi
+  pkgutil --check-signature "$pkg" | grep -q "Developer ID Installer" || fail "package signature lacks Developer ID Installer"
+  spctl --assess --type install -vv "$pkg" || fail "Gatekeeper rejects the signed package"
+  xcrun stapler validate "$pkg" || fail "notarization ticket not stapled"
 else
   echo "::warning::package is unsigned"
 fi

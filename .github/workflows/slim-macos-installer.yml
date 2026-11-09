@@ -103,7 +103,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           security find-identity -v "$kc"
-          id="$(security find-identity -v "$kc" | grep -o '"Developer ID Installer: [^"]*"' | head -1 | tr -d '"')"
+          id="$(security find-identity -v "$kc" | sed -n 's/.*"\(Developer ID Installer: [^"]*\)".*/\1/p' | head -1)"
           if [ -z "$id" ]; then
             [ "$REQUIRE" = true ] && { echo "::error::no 'Developer ID Installer' identity in the certificate secret"; exit 1; }
             echo "::warning::no 'Developer ID Installer' identity; building an unsigned package"; exit 0
