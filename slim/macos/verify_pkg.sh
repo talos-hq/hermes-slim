@@ -36,10 +36,12 @@ dir="$HOME/.hermes-slim/current"
 
 step "T5 the native bundle was chosen"
 grep -q "target=$EXPECT_TARGET" /var/log/hermes-slim-install.log || fail "postinstall did not pick $EXPECT_TARGET"
-py="$(find "$dir" -path '*/bin/python3*' -type f -perm -u+x | head -1)"
-[ -n "$py" ] || fail "no bundled python found"
-file "$py"
-lipo -archs "$py" | tr ' ' '\n' | grep -qx "$EXPECT_ARCH" || fail "bundled python is $(lipo -archs "$py"), expected $EXPECT_ARCH"
+# Check the launcher's interpreter; python3*-config are executable shell scripts.
+py="$dir/python/bin/python3"
+[ -x "$py" ] || fail "no bundled python found"
+file -L "$py"
+archs="$(lipo -archs "$py")"
+printf '%s\n' "$archs" | tr ' ' '\n' | grep -qx "$EXPECT_ARCH" || fail "bundled python is $archs, expected $EXPECT_ARCH"
 
 step "T6 hermes runs"
 "$HOME/.local/bin/hermes" --version
