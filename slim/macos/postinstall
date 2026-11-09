@@ -1,0 +1,37 @@
+#!/bin/sh
+# Runs as root from Installer.app or `installer -pkg`. Installs the bundle for this Mac's
+# real CPU into the installing user's home, exactly as `install.sh --archive` would.
+set -eu
+here="$(cd "$(dirname "$0")" && pwd)"
+log=/var/log/hermes-slim-install.log
+exec >>"$log" 2>&1
+echo "--- hermes-slim postinstall $(date)"
+
+# hw.optional.arm64 is 1 on Apple Silicon even when this script runs under Rosetta, where
+# `uname -m` would say x86_64 and we would install the slower translated bundle.
+if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+  target=darwin-arm64
+else
+  target=darwin-x64
+fi
+
+# `sudo installer` (CI, MDM, scripts) sets SUDO_USER; Installer.app runs as the console user.
+user="${SUDO_USER:-}"
+[ -n "$user" ] && [ "$user" != root ] || user="$(stat -f %Su /dev/console)"
+[ -n "$user" ] && [ "$user" != root ] || { echo "no non-root user to install for"; exit 1; }
+install_home="$(dscl . -read "/Users/$user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')"
+
+archive="$(ls "$here"/bundles/hermes-slim-*-"$target".tar.zst | head -1)"
+echo "user=$user home=$install_home target=$target archive=$archive"
+# The scripts dir is root-owned and private; stage the archive where the user can read it.
+stage="$(mktemp -d /tmp/hermes-slim-pkg.XXXXXX)"
+cp "$archive" "$archive.sha256" "$here/install.sh" "$stage/"
+# Apple's tar shells out to zstd; Installer has neither Homebrew nor a network dependency.
+cp "$here/bundles/zstd-$target" "$stage/zstd"
+expected="$(cut -d' ' -f1 "$here/bundles/zstd-$target.sha256")"
+[ "$expected" = "$(shasum -a 256 "$stage/zstd" | cut -d' ' -f1)" ] || { echo "zstd sha256 mismatch"; exit 1; }
+chown -R "$user" "$stage"
+sudo -u "$user" -H env HOME="$install_home" PATH="$stage:/usr/bin:/bin:/usr/sbin:/sbin" \
+  sh "$stage/install.sh" --archive "$stage/$(basename "$archive")" --no-setup
+rm -rf "$stage"
+echo "done: run 'hermes-slim-setup' in a new terminal to finish"

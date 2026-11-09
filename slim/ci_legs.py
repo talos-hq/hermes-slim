@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 
-# macos-latest currently points at the macos-26 arm64 image; pinning keeps the image fixed.
+# Pin the native ARM64 image; runner allocation can take tens of minutes.
 DEFAULT_ARM_IMAGE = "macos-15"
 OPT_IN_LABEL = "ci:bundle-macos"
 NOT_ACQUIRED = "not acquired by Runner"

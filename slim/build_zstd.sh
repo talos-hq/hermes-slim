@@ -1,21 +1,34 @@
 #!/bin/sh
-# Build a static zstd for Linux x86_64 clients that have none (stock Debian slim,
-# many minimal images). Linked statically against musl, so the same binary runs on
-# glibc and musl. Published beside the bundles; install.sh fetches it only when
-# the host lacks zstd. Needs build-base (Alpine).
+# Build a standalone decompressor for clients without zstd. Linux builds need
+# build-base (Alpine) and link musl statically; macOS links only system libraries.
 #
 #   sh slim/build_zstd.sh OUT_DIR
 set -eu
 out="$1"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) target=darwin-arm64; jobs="$(sysctl -n hw.ncpu)"; ldflags= ;;
+  Darwin-x86_64) target=darwin-x64; jobs="$(sysctl -n hw.ncpu)"; ldflags= ;;
+  Linux-x86_64) target=linux-x64; jobs="$(nproc)"; ldflags=-static ;;
+  *) echo "unsupported decompressor build host" >&2; exit 1 ;;
+esac
+sha256_file() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d' ' -f1; }
 version=1.5.7
 sha256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 curl -fsSL -o "$work/zstd.tar.gz" "https://github.com/facebook/zstd/releases/download/v$version/zstd-$version.tar.gz"
-echo "$sha256  $work/zstd.tar.gz" | sha256sum -c -
+[ "$sha256" = "$(sha256_file "$work/zstd.tar.gz")" ] || { echo "zstd source sha256 mismatch" >&2; exit 1; }
 tar -xzf "$work/zstd.tar.gz" -C "$work"
-make -C "$work/zstd-$version/programs" -j"$(nproc)" zstd-decompress LDFLAGS=-static >/dev/null
+make -C "$work/zstd-$version/programs" -j"$jobs" zstd-decompress LDFLAGS="$ldflags" \
+  HAVE_ZLIB=0 HAVE_LZMA=0 HAVE_LZ4=0 >/dev/null
 mkdir -p "$out"
-strip -o "$out/zstd-linux-x64" "$work/zstd-$version/programs/zstd-decompress"
-(cd "$out" && sha256sum zstd-linux-x64 > zstd-linux-x64.sha256)
-"$out/zstd-linux-x64" -V
+strip -o "$out/zstd-$target" "$work/zstd-$version/programs/zstd-decompress"
+printf '%s  %s\n' "$(sha256_file "$out/zstd-$target")" "zstd-$target" > "$out/zstd-$target.sha256"
+"$out/zstd-$target" -V
+case "$target" in
+  darwin-*)
+    otool -L "$out/zstd-$target" | awk '
+      NR > 1 { print; if ($1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\//) bad = 1 }
+      END { exit bad }'
+    ;;
+esac

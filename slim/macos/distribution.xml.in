@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Hermes</title>
+    <!-- One package for Intel and Apple Silicon: it carries both bundles and postinstall picks. -->
+    <options hostArchitectures="arm64,x86_64" customize="never" require-scripts="false"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <conclusion file="conclusion.txt" mime-type="text/plain"/>
+    <choices-outline>
+        <line choice="default"><line choice="com.talos-hq.hermes-slim"/></line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="com.talos-hq.hermes-slim" visible="false">
+        <pkg-ref id="com.talos-hq.hermes-slim"/>
+    </choice>
+    <pkg-ref id="com.talos-hq.hermes-slim" version="@VERSION@" onConclusion="none">hermes-slim-component.pkg</pkg-ref>
+</installer-gui-script>
