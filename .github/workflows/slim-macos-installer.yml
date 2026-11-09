@@ -59,11 +59,14 @@ jobs:
           if [ '${{ matrix.target }}' = darwin-arm64 ]; then test "$(uname -m)" = arm64; fi
           python3 slim/build_bundle.py --target ${{ matrix.target }} --wheels wheels --work "$RUNNER_TEMP/hs-work" --stage-only
           python3 slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
+          sh slim/build_zstd.sh dist
           ls -l dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bundle-${{ matrix.target }}
-          path: dist/*.tar.zst*
+          path: |
+            dist/*.tar.zst*
+            dist/zstd-*
           retention-days: 3
 
   pkg:

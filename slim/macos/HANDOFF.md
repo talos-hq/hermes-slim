@@ -13,6 +13,7 @@ installs the right one:
 | File | Role |
 |---|---|
 | `slim/macos/build_pkg.sh DIST OUT.pkg` | `pkgbuild --nopayload --scripts` + `productbuild`; optional `productsign`, `notarytool`, `stapler` driven by env (`PKG_SIGN_IDENTITY`, `NOTARY_KEY_PATH/ID/ISSUER`). |
+| `slim/build_zstd.sh OUT_DIR` | Builds a standalone native decompressor (macOS links only system libraries) from hash-pinned sources. Both macOS binaries and checksums are embedded with the archives: Apple's tar needs an external zstd, which is absent from Installer's minimal PATH. |
 | `slim/macos/distribution.xml.in` | `hostArchitectures="arm64,x86_64"` so Installer runs natively on both (no Rosetta prompt). |
 | `slim/macos/postinstall` | Runs as root. Picks `darwin-arm64` if `sysctl hw.optional.arm64` = 1 (true even under Rosetta), else `darwin-x64`. Resolves the user (`SUDO_USER`, else console owner), stages the archive in `/tmp`, runs `install.sh --archive … --no-setup` **as that user**. Log: `/var/log/hermes-slim-install.log`. |
 | `slim/install.sh` | New `--no-setup` flag: stop after linking `~/.local/bin/hermes` (an installer has no TTY for setup prompts). |

@@ -26,8 +26,12 @@ echo "user=$user home=$install_home target=$target archive=$archive"
 # The scripts dir is root-owned and private; stage the archive where the user can read it.
 stage="$(mktemp -d /tmp/hermes-slim-pkg.XXXXXX)"
 cp "$archive" "$archive.sha256" "$here/install.sh" "$stage/"
+# Apple's tar shells out to zstd; Installer has neither Homebrew nor a network dependency.
+cp "$here/bundles/zstd-$target" "$stage/zstd"
+expected="$(cut -d' ' -f1 "$here/bundles/zstd-$target.sha256")"
+[ "$expected" = "$(shasum -a 256 "$stage/zstd" | cut -d' ' -f1)" ] || { echo "zstd sha256 mismatch"; exit 1; }
 chown -R "$user" "$stage"
-sudo -u "$user" -H env HOME="$install_home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+sudo -u "$user" -H env HOME="$install_home" PATH="$stage:/usr/bin:/bin:/usr/sbin:/sbin" \
   sh "$stage/install.sh" --archive "$stage/$(basename "$archive")" --no-setup
 rm -rf "$stage"
 echo "done: run 'hermes-slim-setup' in a new terminal to finish"

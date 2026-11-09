@@ -15,6 +15,7 @@ pkgutil --expand-full "$pkg" "$RUNNER_TEMP/expanded"
 grep -q 'hostArchitectures="arm64,x86_64"' "$RUNNER_TEMP/expanded/Distribution" || fail "Distribution lacks hostArchitectures"
 for t in darwin-arm64 darwin-x64; do
   ls "$RUNNER_TEMP"/expanded/*.pkg/Scripts/bundles/hermes-slim-*-"$t".tar.zst >/dev/null || fail "package lacks the $t bundle"
+  ls "$RUNNER_TEMP"/expanded/*.pkg/Scripts/bundles/zstd-"$t" >/dev/null || fail "package lacks the $t decompressor"
 done
 
 step "T3 signature (signed builds only)"
