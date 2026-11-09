@@ -19,15 +19,15 @@ fi
 user="${SUDO_USER:-}"
 [ -n "$user" ] && [ "$user" != root ] || user="$(stat -f %Su /dev/console)"
 [ -n "$user" ] && [ "$user" != root ] || { echo "no non-root user to install for"; exit 1; }
-home="$(dscl . -read "/Users/$user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')"
+install_home="$(dscl . -read "/Users/$user" NFSHomeDirectory | sed 's/^NFSHomeDirectory: //')"
 
 archive="$(ls "$here"/bundles/hermes-slim-*-"$target".tar.zst | head -1)"
-echo "user=$user home=$home target=$target archive=$archive"
+echo "user=$user home=$install_home target=$target archive=$archive"
 # The scripts dir is root-owned and private; stage the archive where the user can read it.
 stage="$(mktemp -d /tmp/hermes-slim-pkg.XXXXXX)"
 cp "$archive" "$archive.sha256" "$here/install.sh" "$stage/"
 chown -R "$user" "$stage"
-sudo -u "$user" -H env HOME="$home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+sudo -u "$user" -H env HOME="$install_home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
   sh "$stage/install.sh" --archive "$stage/$(basename "$archive")" --no-setup
 rm -rf "$stage"
 echo "done: run 'hermes-slim-setup' in a new terminal to finish"

@@ -15,7 +15,7 @@ class InstallTests(unittest.TestCase):
     def test_no_setup_links_commands_without_running_setup(self):
         for no_setup in (True, False):
             with self.subTest(no_setup=no_setup), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 home = root / "home"
                 home.mkdir()
                 bundle = root / "bundle" / "bin"
