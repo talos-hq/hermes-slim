@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Install the universal hermes-slim .pkg on this real Mac and verify the result.
 #   EXPECT_ARCH=arm64|x86_64 EXPECT_TARGET=darwin-arm64|darwin-x64 bash verify_pkg.sh Hermes-Slim.pkg
 set -euo pipefail
