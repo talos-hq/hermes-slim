@@ -35,7 +35,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: darwin-arm64, os: macos-15 }
+          - { target: darwin-arm64, os: blacksmith-12vcpu-macos-latest }
           - { target: darwin-x64, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -55,6 +55,8 @@ jobs:
           gh release download latest -R hermes-slim/wheels -D wheels --pattern '*.whl' || echo "no extra wheels"
       - name: Build bundle
         run: |
+          uname -m
+          if [ '${{ matrix.target }}' = darwin-arm64 ]; then test "$(uname -m)" = arm64; fi
           python3 slim/build_bundle.py --target ${{ matrix.target }} --wheels wheels --work "$RUNNER_TEMP/hs-work" --stage-only
           python3 slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
           ls -l dist
@@ -66,8 +68,7 @@ jobs:
 
   pkg:
     needs: bundle
-    # Assembly is architecture-independent; reserve the scarce ARM pool for native tests.
-    runs-on: macos-15-intel
+    runs-on: blacksmith-12vcpu-macos-latest
     environment: release-signing
     timeout-minutes: 60
     defaults: { run: { shell: bash } }
@@ -117,7 +118,12 @@ jobs:
             echo "NOTARY_ISSUER=$APPLE_API_ISSUER"
           } >> "$GITHUB_ENV"
       - name: Build universal package
-        run: sh slim/macos/build_pkg.sh dist "$RUNNER_TEMP/Hermes-Slim.pkg" && mkdir out && mv "$RUNNER_TEMP/Hermes-Slim.pkg" out/
+        run: |
+          uname -m
+          test "$(uname -m)" = arm64
+          sh slim/macos/build_pkg.sh dist "$RUNNER_TEMP/Hermes-Slim.pkg"
+          mkdir out
+          mv "$RUNNER_TEMP/Hermes-Slim.pkg" out/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Hermes-Slim-pkg
@@ -130,7 +136,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-15, arch: arm64, target: darwin-arm64 }
+          - { os: blacksmith-12vcpu-macos-latest, arch: arm64, target: darwin-arm64 }
           - { os: macos-15-intel, arch: x86_64, target: darwin-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

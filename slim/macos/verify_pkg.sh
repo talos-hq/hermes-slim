@@ -7,6 +7,7 @@ fail() { echo "::error::$*"; exit 1; }
 step() { echo; echo "== $*"; }
 
 step "T1 host is the expected architecture"
+uname -m
 [ "$(uname -m)" = "$EXPECT_ARCH" ] || fail "runner is $(uname -m), expected $EXPECT_ARCH"
 
 step "T2 package declares both architectures"
