@@ -16,7 +16,7 @@ installs the right one:
 | `slim/build_zstd.sh OUT_DIR` | Builds a standalone native decompressor (macOS links only system libraries) from hash-pinned sources. Both macOS binaries and checksums are embedded with the archives: Apple's tar needs an external zstd, which is absent from Installer's minimal PATH. |
 | `slim/macos/distribution.xml.in` | `hostArchitectures="arm64,x86_64"` so Installer runs natively on both (no Rosetta prompt). |
 | `slim/macos/postinstall` | Runs as root. Picks `darwin-arm64` if `sysctl hw.optional.arm64` = 1 (true even under Rosetta), else `darwin-x64`. Resolves the user (`SUDO_USER`, else console owner), stages the archive in `/tmp`, runs `install.sh --archive … --no-setup` **as that user**. Log: `/var/log/hermes-slim-install.log`. |
-| `slim/install.sh` | New `--no-setup` flag: stop after linking `~/.local/bin/hermes` (an installer has no TTY for setup prompts). |
+| `slim/install.sh` | New `--no-setup` flag: stop after linking `~/.local/bin/hermes` (an installer has no TTY for setup prompts). On stock macOS without zstd, fetch and verify the native standalone decompressor published beside the bundles, also supporting offline adjacent files. |
 | `slim/macos/verify_pkg.sh PKG` | Real-machine checks T1–T7 (below). |
 | `.github/workflows/slim-macos-installer.yml` | Nightly 07:17 UTC + `workflow_dispatch` + PRs touching these paths. Jobs: `bundle` (arm64 on `macos-15`, x64 on `macos-15-intel`) → `pkg` (env `release-signing`) → `verify` (both runners). |
 

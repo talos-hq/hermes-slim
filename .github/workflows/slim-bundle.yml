@@ -159,8 +159,8 @@ jobs:
           }
       - name: Package bundle
         run: ${{ steps.py.outputs.bin }} slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
-      - name: Static zstd for clients without one
-        if: matrix.target == 'linux-x64-musl'
+      - name: Standalone zstd for clients without one
+        if: matrix.target == 'linux-x64-musl' || startsWith(matrix.target, 'darwin-')
         run: sh slim/build_zstd.sh dist
       - name: Smoke test
         env:

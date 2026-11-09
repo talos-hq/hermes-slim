@@ -20,6 +20,8 @@ on:
     paths:
       - slim/macos/**
       - slim/install.sh
+      - slim/build_zstd.sh
+      - slim/tests/**
       - .github/workflows/slim-macos-installer.yml
 
 permissions:
@@ -55,6 +57,7 @@ jobs:
           gh release download latest -R hermes-slim/wheels -D wheels --pattern '*.whl' || echo "no extra wheels"
       - name: Build bundle
         run: |
+          python3 -m unittest discover -s slim/tests -v
           uname -m
           if [ '${{ matrix.target }}' = darwin-arm64 ]; then test "$(uname -m)" = arm64; fi
           python3 slim/build_bundle.py --target ${{ matrix.target }} --wheels wheels --work "$RUNNER_TEMP/hs-work" --stage-only

@@ -63,27 +63,31 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "hermes-slim: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
 
-# Bundles are .tar.zst (zstd -9). bsdtar (macOS, most BSDs) reads them itself;
-# otherwise use the host's zstd, or the static one published beside the bundles
-# (Linux x86_64 only: stock Debian slim and many minimal images have no zstd).
+# Apple's bsdtar shells out to zstd. Prefer the native standalone decompressor
+# published beside the bundles rather than assuming a bsdtar has built-in support.
+case "$target" in
+  linux-x64|linux-x64-musl) zstd_asset=zstd-linux-x64 ;;
+  darwin-arm64|darwin-x64) zstd_asset="zstd-$target" ;;
+  *) zstd_asset="" ;;
+esac
 unpack() {
   if command -v zstd >/dev/null 2>&1; then
     zstd -dcq "$1" | tar -xf - -C "$2" --strip-components 1
-  elif tar --version 2>/dev/null | grep -q bsdtar; then
-    tar -xf "$1" -C "$2" --strip-components 1
-  elif [ "$target" = linux-x64 ] || [ "$target" = linux-x64-musl ]; then
+  elif [ -n "$zstd_asset" ]; then
     if [ -n "$base" ]; then
-      echo "→ no zstd here; fetching a static one"
-      curl -fsSL -o "$tmp/zstd" "$base/zstd-linux-x64"
-      curl -fsSL -o "$tmp/zstd.sha256" "$base/zstd-linux-x64.sha256"
+      echo "→ no zstd here; fetching a standalone decompressor"
+      curl -fsSL -o "$tmp/zstd" "$base/$zstd_asset"
+      curl -fsSL -o "$tmp/zstd.sha256" "$base/$zstd_asset.sha256"
     else
-      cp "$(dirname "$1")/zstd-linux-x64" "$tmp/zstd" 2>/dev/null &&
-        cp "$(dirname "$1")/zstd-linux-x64.sha256" "$tmp/zstd.sha256" 2>/dev/null ||
-        { echo "hermes-slim: no zstd; install it, or put zstd-linux-x64(.sha256) beside the archive" >&2; exit 1; }
+      cp "$(dirname "$1")/$zstd_asset" "$tmp/zstd" 2>/dev/null &&
+        cp "$(dirname "$1")/$zstd_asset.sha256" "$tmp/zstd.sha256" 2>/dev/null ||
+        { echo "hermes-slim: no zstd; install it, or put $zstd_asset(.sha256) beside the archive" >&2; exit 1; }
     fi
     [ "$(cut -d' ' -f1 "$tmp/zstd.sha256")" = "$(sha256 "$tmp/zstd")" ] || { echo "hermes-slim: zstd sha256 mismatch" >&2; exit 1; }
     chmod +x "$tmp/zstd"
     "$tmp/zstd" -dcq "$1" | tar -xf - -C "$2" --strip-components 1
+  elif tar --version 2>/dev/null | grep -q bsdtar; then
+    tar -xf "$1" -C "$2" --strip-components 1
   else
     echo "hermes-slim: unpacking needs zstd (apt install zstd / dnf install zstd / brew install zstd)" >&2
     exit 1
