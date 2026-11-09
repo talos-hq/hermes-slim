@@ -16,8 +16,8 @@ import os
 import subprocess
 import sys
 
-# macos-latest currently points at the macos-26 arm64 image; pinning keeps the image fixed.
-DEFAULT_ARM_IMAGE = "macos-15"
+# GitHub's hosted ARM pool starves this repo; use the organization's Apple Silicon pool.
+DEFAULT_ARM_IMAGE = "blacksmith-12vcpu-macos-latest"
 OPT_IN_LABEL = "ci:bundle-macos"
 NOT_ACQUIRED = "not acquired by Runner"
 
