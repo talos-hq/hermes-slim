@@ -710,7 +710,7 @@
     },
     {
       "name": "cron.manage",
-      "summary": "List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store.",
+      "summary": "List/add/update/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store.",
       "params": [
         {
           "name": "params",
@@ -4647,6 +4647,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/WakeStopResult"
+        }
+      }
+    },
+    {
+      "name": "workflow.list",
+      "summary": "Every saved workflow of the profile, with its YAML source (unparseable files carry error).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ProfileParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/WorkflowListResult"
+        }
+      }
+    },
+    {
+      "name": "workflow.save",
+      "summary": "Validate and write one workflow; an invalid document is refused (4004) and never written.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/WorkflowSaveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/WorkflowSaveResult"
         }
       }
     }
@@ -15401,7 +15437,8 @@
           "add",
           "remove",
           "pause",
-          "resume"
+          "resume",
+          "update"
         ],
         "title": "CronAction",
         "type": "string"
@@ -15475,6 +15512,18 @@
             "default": "",
             "title": "Prompt Preview",
             "type": "string"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt"
           },
           "model": {
             "anyOf": [
@@ -15834,6 +15883,108 @@
             "default": null,
             "title": "Name"
           },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "workdir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workdir"
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skills"
+          },
+          "enabled_toolsets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled Toolsets"
+          },
+          "script": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Script"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Effort"
+          },
           "include_disabled": {
             "anyOf": [
               {
@@ -15933,7 +16084,7 @@
       },
       "CronManageResult": {
         "additionalProperties": true,
-        "description": "Pass-through of ``tools/cronjob_tools.py::cronjob`` JSON: ``list`` \u2192 ``jobs``/``count``\n(+ ``scoped`` when profile-scoped); ``add`` \u2192 the created job's summary + ``job``; ``remove`` \u2192\n``removed_job``; ``pause``/``resume`` \u2192 ``job``. A tool-level failure lands in ``error``.",
+        "description": "Pass-through of ``tools/cronjob_tools.py::cronjob`` JSON: ``list`` \u2192 ``jobs``/``count``\n(+ ``scoped`` when profile-scoped); ``add`` \u2192 the created job's summary + ``job``; ``remove`` \u2192\n``removed_job``; ``pause``/``resume``/``update`` \u2192 ``job``. A tool-level failure lands in ``error``.",
         "properties": {
           "success": {
             "anyOf": [
@@ -47785,6 +47936,119 @@
           "secret"
         ],
         "title": "WorkerScopeParams",
+        "type": "object"
+      },
+      "WorkflowListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "workflows": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowRow"
+            },
+            "title": "Workflows",
+            "type": "array"
+          },
+          "dir": {
+            "title": "Dir",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflows",
+          "dir"
+        ],
+        "title": "WorkflowListResult",
+        "type": "object"
+      },
+      "WorkflowRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "steps": {
+            "default": 0,
+            "title": "Steps",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          }
+        },
+        "required": [
+          "name",
+          "source"
+        ],
+        "title": "WorkflowRow",
+        "type": "object"
+      },
+      "WorkflowSaveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source"
+        ],
+        "title": "WorkflowSaveParams",
+        "type": "object"
+      },
+      "WorkflowSaveResult": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "steps"
+        ],
+        "title": "WorkflowSaveResult",
         "type": "object"
       },
       "_SessionScoped": {

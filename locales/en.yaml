@@ -809,6 +809,9 @@ gateway:
     ack_described: "Learning a skill from what you described…"
     ack_conversation: "Learning a skill from this conversation…"
 
+  workflow:
+    ack: "🔁 Running workflow: {name}"
+
   plan:
     ack_task: "Planning: {task}"
     ack_conversation: "Planning from this conversation's context…"
@@ -1643,6 +1646,8 @@ slash:
     description: "Spawn an independent subagent to review the work just discussed (PR, code, docs)"
   loop:
     description: "Re-run a prompt on a recurring interval in this session"
+  workflow:
+    description: "Run a saved multi-step workflow (YAML in workflows/) as a turn in this chat"
   plan:
     description: "Write a markdown implementation plan to .hermes/plans/ without executing anything"
   moa:
@@ -3071,6 +3076,8 @@ cli:
     learn:
       from_description: "⚡ Learning a skill from what you described..."
       from_conversation: "⚡ Learning a skill from this conversation..."
+    workflow:
+      running: "🔁 Running workflow: {name}"
     plan:
       planning: "📋 Planning: {task}"
       from_conversation: "📋 Planning from this conversation's context..."

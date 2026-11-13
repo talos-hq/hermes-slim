@@ -387,7 +387,9 @@ _SLACK_VIA_HERMES_ONLY = frozenset({
     # Recovery-only, after a restart lost a turn: `/hermes discard` reaches it.
     "discard",
     # One-time answer to the low-disk prompt; `/hermes autoprune on` reaches it.
-    "autoprune"})
+    "autoprune",
+    # Saved multi-step prompts; `/hermes workflow <name>` reaches it.
+    "workflow"})
 
 
 def _sanitize_slack_name(raw: str) -> str:

@@ -104,6 +104,17 @@ class CLICommandsSessionToolsMixin:
     """``/stop``, ``/agents``, ``/journey``, ``/paste``, ``/copy``, ``/image``, ``/tools``,
     ``/profile`` handlers (moved from ``CLICommandsMixin``)."""
 
+    def _handle_workflow_command(self, cmd: str):
+        """Handle /workflow <name> [input] — queue a saved workflow as the next normal turn
+        (``agent/workflow.py``); no name or an unknown one prints usage and the saved names."""
+        from agent.workflow import resolve_workflow_command, split_workflow_args
+        arg = _command_arg(cmd)
+        prompt, message = resolve_workflow_command(arg)
+        if prompt is None:
+            print(message)
+            return
+        self._queue_prompt_turn(prompt, "/workflow", _t("workflow.running", name=split_workflow_args(arg)[0]))
+
 
     # ---- /stop, /agents -------------------------------------------------------------------
     def _handle_stop_command(self):
