@@ -17,8 +17,8 @@ import path from 'node:path'
 import { chromium, type Page } from '@playwright/test'
 
 import { waitForChatReady } from '../../../tests-js/scripts/desktop-chat-smoke'
-import { startMockServer } from '../../../tests-js/scripts/mock-server'
 import { writeEnvFile, writeMockProviderConfig } from '../../../tests-js/scripts/mock-provider-config'
+import { startMockServer } from '../../../tests-js/scripts/mock-server'
 
 import {
   buildAppEnv,
@@ -162,13 +162,19 @@ test('Workflow button opens the editor and Run executes the workflow in chat', a
 
 test('typing /workflow in the composer runs the saved workflow', async () => {
   const page = fixture!.page
-  const composer = page.locator('[contenteditable="true"]').first()
+  const composer = page.locator('[data-slot="composer-root"] [contenteditable="true"]').first()
+  const command = '/workflow hello-workflow the team'
 
-  await page.getByTestId('workflow-button').click()
-  await page.getByTestId('workflow-run').waitFor()
+  // A fresh draft: the previous run's transcript is gone, so DONE below can only come from this turn.
   await page.evaluate(() => (window.location.hash = '#/'))
-  await composer.click()
-  await composer.type('/workflow hello-workflow the team')
-  await page.keyboard.press('Enter')
+  await expect(page.getByText(DONE)).toHaveCount(0)
+
+  // The composer remounts (and may restore a draft) right after navigation; retry until it holds
+  // exactly the command, so Enter never submits a half-restored mix.
+  await expect(async () => {
+    await composer.fill(command)
+    await expect(composer).toHaveText(command, { timeout: 1_000 })
+  }).toPass({ timeout: 20_000 })
+  await composer.press('Enter')
   await expect(page.getByText(DONE).first()).toBeVisible({ timeout: 60_000 })
 })
