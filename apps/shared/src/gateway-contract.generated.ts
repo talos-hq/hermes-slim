@@ -3940,6 +3940,14 @@ export interface RollbackDiffResult {
 export interface CronManageParams {
   action?: CronAction
   name?: string | null
+  job_id?: string | null
+  model?: string | null
+  provider?: string | null
+  workdir?: string | null
+  skills?: string[] | null
+  enabled_toolsets?: string[] | null
+  script?: string | null
+  reasoning_effort?: string | null
   include_disabled?: boolean | string | null
   schedule?: string | null
   prompt?: string | null
@@ -3948,8 +3956,8 @@ export interface CronManageParams {
   deliver?: string | null
   profile?: string | null
 }
-export type CronAction = 'list' | 'add' | 'remove' | 'pause' | 'resume'
-/** Pass-through of ``tools/cronjob_tools.py::cronjob`` JSON: ``list`` → ``jobs``/``count`` (+ ``scoped`` when profile-scoped); ``add`` → the created job's summary + ``job``; ``remove`` → ``removed_job``; ``pause``/``resume`` → ``job``. A tool-level failure lands in ``error``. */
+export type CronAction = 'list' | 'add' | 'remove' | 'pause' | 'resume' | 'update'
+/** Pass-through of ``tools/cronjob_tools.py::cronjob`` JSON: ``list`` → ``jobs``/``count`` (+ ``scoped`` when profile-scoped); ``add`` → the created job's summary + ``job``; ``remove`` → ``removed_job``; ``pause``/``resume``/``update`` → ``job``. A tool-level failure lands in ``error``. */
 export interface CronManageResult {
   success?: boolean | null
   error?: string | null
@@ -3979,6 +3987,7 @@ export interface CronJobRow {
   skill?: string | null
   skills?: string[]
   prompt_preview?: string
+  prompt?: string | null
   model?: string | null
   provider?: string | null
   base_url?: string | null
@@ -4571,6 +4580,26 @@ export interface PluginCatalogLookupEntry {
   sha: string
   subdir: string
   tier?: string
+}
+export interface WorkflowListResult {
+  workflows: WorkflowRow[]
+  dir: string
+}
+export interface WorkflowRow {
+  name: string
+  description?: string
+  steps?: number
+  source: string
+  error?: string | null
+}
+export interface WorkflowSaveParams {
+  profile?: string | null
+  name: string
+  source: string
+}
+export interface WorkflowSaveResult {
+  name: string
+  steps: number
 }
 export interface GroupsAttachmentUploadParams {
   profile?: string | null
@@ -6128,7 +6157,7 @@ export interface RpcMethods {
   'connectors.policy.set': { params: ConnectorPolicySetParams; result: ConnectorPolicySetResult }
   /** The scoped profile's cached or current tool list for one connector. */
   'connectors.tools': { params: ConnectorToolsParams; result: ConnectorToolsResult }
-  /** List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store. */
+  /** List/add/update/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store. */
   'cron.manage': { params: CronManageParams; result: CronManageResult }
   /** Block/unblock NEW spawns globally (active children keep running); returns the new state. */
   'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult }
@@ -6566,6 +6595,10 @@ export interface RpcMethods {
   'wake.status': { params: WakeStatusParams; result: WakeStatusResult }
   /** Stop this surface's listener; persist also writes wake_word.enabled: false. */
   'wake.stop': { params: WakeStopParams; result: WakeStopResult }
+  /** Every saved workflow of the profile, with its YAML source (unparseable files carry error). */
+  'workflow.list': { params: ProfileParams; result: WorkflowListResult }
+  /** Validate and write one workflow; an invalid document is refused (4004) and never written. */
+  'workflow.save': { params: WorkflowSaveParams; result: WorkflowSaveResult }
 }
 export type RpcMethod = keyof RpcMethods
 export const RPC_METHODS = [
@@ -6826,7 +6859,9 @@ export const RPC_METHODS = [
   'wake.resume',
   'wake.start',
   'wake.status',
-  'wake.stop'
+  'wake.stop',
+  'workflow.list',
+  'workflow.save'
 ] as const satisfies readonly RpcMethod[]
 
 // ── Canonical (hermes-gateway-v1) methods only the session authority serves ──

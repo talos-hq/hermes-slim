@@ -680,6 +680,11 @@ _cmd_learn = _prompt_builtin("agent.learn_prompt", "build_learn_prompt")
 _cmd_plan = _prompt_builtin("agent.plan_prompt", "build_plan_prompt")
 
 
+def _cmd_workflow(rid, params, session, name, arg):
+    prompt, message = _tools_mod("agent.workflow").resolve_workflow_command(arg)
+    return _ok(rid, {"type": "send", "message": prompt}) if prompt else _exec_out(rid, message)
+
+
 def _cmd_init(rid, params, session, name, arg):
     """/init: build the AGENTS.md prompt against the SESSION's active directory, then submit it
     as a normal turn (the live agent does the scan and the write). The desktop app launches the
@@ -998,7 +1003,7 @@ def _cmd_skills(rid, params, session, name, arg):
 
 
 _SLASH_BUILTINS = {
-    "queue": _cmd_queue, "q": _cmd_queue, "learn": _cmd_learn, "plan": _cmd_plan, "init": _cmd_init,
+    "queue": _cmd_queue, "q": _cmd_queue, "learn": _cmd_learn, "plan": _cmd_plan, "workflow": _cmd_workflow, "init": _cmd_init,
     "moa": _cmd_moa, "focus": _cmd_focus, "retry": _cmd_retry, "steer": _cmd_steer, "goal": _cmd_goal,
     "loop": _cmd_loop, "undo": _cmd_undo, "snapshot": _cmd_snapshot, "snap": _cmd_snapshot,
     "compress": _cmd_compress, "compact": _cmd_compress,

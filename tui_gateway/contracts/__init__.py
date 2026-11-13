@@ -20,6 +20,7 @@ from . import (
     sessions,
     tools_commands,
     tools_mcp_plugins,
+    workflows,
 )
 from . import canonical
 from .base import JsonValue, Params, Payload, Result, WireEnum

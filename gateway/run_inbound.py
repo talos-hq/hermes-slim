@@ -901,6 +901,16 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                 if task else t("gateway.plan.ack_conversation"))
         return await self._hm_rewrite_turn_to_prompt(event, source, "plan", _ack, lambda: build_plan_prompt(task))
 
+    async def _hm_cmd_workflow(self, event, source, _quick_key):
+        from agent.workflow import resolve_workflow_command, split_workflow_args
+
+        arg = event.get_command_args().strip()
+        prompt, message = resolve_workflow_command(arg)
+        if prompt is None:
+            return True, message
+        _ack = t("gateway.workflow.ack", name=split_workflow_args(arg)[0])
+        return await self._hm_rewrite_turn_to_prompt(event, source, "workflow", _ack, lambda: prompt)
+
     async def _hm_cmd_init(self, event, source, _quick_key):
         # /init builds the prompt first: the ack wording depends on whether AGENTS.md exists.
         from hermes_cli.init_command import build_init_prompt_for_cwd
@@ -1002,7 +1012,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
     # Idle-path built-ins with bespoke flow (confirmations, prompt rewrites, one-shot MoA), each
     # handled by ``_hm_cmd_<name>`` → ``(handled, result)``; ``(False, None)`` falls through to the agent.
     _HM_CANONICAL_COMMANDS = frozenset({
-        "new", "start", "egress", "learn", "plan", "init", "blueprint", "undo", "queue", "steer", "moa",
+        "new", "start", "egress", "learn", "plan", "workflow", "init", "blueprint", "undo", "queue", "steer", "moa",
     })
 
     async def _hm_dispatch_canonical_command(
