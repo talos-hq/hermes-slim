@@ -1,3 +1,26 @@
+<div align="center">
+
+<a href="https://talosbot.ai"><img src="https://raw.githubusercontent.com/talos-hq/.github/main/profile/assets/banner-hermes-slim.jpg" alt="hermes-slim — The agent that grows with you" width="100%"></a>
+
+**The agent that grows with you. Our fork of Hermes Agent by Nous Research, with our fixes on top and upstream merged in.**
+
+<a href="https://talosbot.ai"><img src="https://img.shields.io/badge/talosbot.ai-C89B63?style=for-the-badge&labelColor=0B0D10" alt="talosbot.ai"></a>
+
+</div>
+
+```bash
+git clone https://github.com/talos-hq/hermes-slim && cd hermes-slim && source ./activate
+```
+
+`source ./activate` sets up a pinned uv, Python 3.14 and the locked dependencies (hash-checked against `uv.lock`), then puts `hermes` on your PATH inside the checkout; `deactivate` undoes it. First setup downloads about 2 GB. Fish and PowerShell use `activate.fish` and `activate.ps1`. Details and version pinning: [talosbot.ai/install](https://talosbot.ai/install/).
+
+> [!NOTE]
+> The **Quick Install** below is upstream's: `hermes-agent.nousresearch.com/install.sh` installs upstream Hermes Agent, not this fork.
+
+<sub>Talos HQ's header ends here. The upstream Hermes Agent README follows unchanged.</sub>
+
+---
+
 <p align="center">
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>
