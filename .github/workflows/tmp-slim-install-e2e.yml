@@ -1,0 +1,65 @@
+# TEMPORARY: exercises slim/install.{sh,ps1} on real Windows and macOS for
+# slim/fast-resumable-install. Deleted before that branch merges.
+name: tmp-slim-install-e2e
+
+on:
+  push:
+    branches: [slim/fast-resumable-install]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.ps1 contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          powershell -NoProfile -ExecutionPolicy Bypass -File slim/tests/install_ps1_test.ps1 -Python python
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Real release CDN, 1 vs 8 connections
+        shell: powershell
+        run: |
+          $u = "https://github.com/talos-hq/hermes-slim/releases/download/v0.1.0/hermes-slim-bcfeece1-win32-x64.zip"
+          foreach ($j in 1, 8) {
+            $d = Join-Path $env:RUNNER_TEMP "bench$j"
+            $t = Measure-Command { powershell -NoProfile -ExecutionPolicy Bypass -File slim/install.ps1 -Archive $u -Jobs $j -Dir $d -NoSetup | Out-Host }
+            if ($LASTEXITCODE) { throw "install with -Jobs $j failed" }
+            "TIMING jobs=$j total=$([int]$t.TotalSeconds)s"
+          }
+      - name: Old vs new unpack of the same zip
+        shell: powershell
+        run: |
+          $u = "https://github.com/talos-hq/hermes-slim/releases/download/v0.1.0/hermes-slim-bcfeece1-win32-x64.zip"
+          $zip = Join-Path $env:RUNNER_TEMP "b.zip"
+          Invoke-WebRequest $u -OutFile $zip -UseBasicParsing
+          $old = Measure-Command {
+            Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP "old")
+            Get-ChildItem -Recurse (Join-Path $env:RUNNER_TEMP "old") | Unblock-File
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $new = Measure-Command { [IO.Compression.ZipFile]::ExtractToDirectory($zip, (Join-Path $env:RUNNER_TEMP "new")) }
+          "TIMING unpack old=$([int]$old.TotalSeconds)s new=$([int]$new.TotalSeconds)s"
+
+  posix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh contract
+        run: python3 -m unittest discover -s slim/tests -v
+      - name: Real release CDN, 1 vs 8 connections (download stage)
+        run: |
+          u=https://github.com/talos-hq/hermes-slim/releases/download/v0.1.0/hermes-slim-bcfeece1-darwin-arm64.tar.gz
+          for j in 1 8; do
+            start=$(date +%s)
+            # v0.1.0 ships .tar.gz, which this installer does not unpack: time the download only.
+            sh slim/install.sh --archive "$u" --jobs $j --dir "$RUNNER_TEMP/bench$j" --no-setup >/dev/null 2>&1 || true
+            echo "TIMING jobs=$j download=$(( $(date +%s) - start ))s"
+          done
