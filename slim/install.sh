@@ -1,7 +1,8 @@
 #!/bin/sh
 # hermes-slim installer for macOS and Linux (glibc or musl).
 #
-#   sh install.sh [--version vX.Y.Z | --archive FILE] [--dir ~/.hermes-slim] [--upgrade] [--no-setup] [-- <hermes-slim-setup args>]
+#   sh install.sh [--version vX.Y.Z | --archive FILE|URL] [--dir ~/.hermes-slim] [--jobs N]
+#                 [--upgrade] [--no-setup] [-- <hermes-slim-setup args>]
 #
 # --upgrade (what `hermes update` runs) keeps the existing configuration and only
 # restarts the gateway; without it, setup asks for (or takes) every value.
@@ -9,12 +10,19 @@
 # --no-setup stops after linking `hermes` (the macOS .pkg uses it: an installer has
 # no terminal to prompt on, so the user runs hermes-slim-setup afterwards).
 #
-# --archive installs a bundle already on disk (offline installs, CI); its
-# FILE.sha256 is checked when present.
+# --archive installs a bundle from disk (offline installs, CI) or from any HTTP(S)
+# mirror; its FILE.sha256 / URL.sha256 is checked when present.
+#
+# --jobs sets how many byte ranges of the bundle download at once (default 8; 1
+# downloads it as one stream).
 #
 # Downloads one prebuilt bundle from github.com/talos-hq/hermes-slim releases,
 # verifies its sha256, unpacks it, and runs hermes-slim-setup. Nothing is
 # compiled and no package manager runs.
+#
+# Every stage resumes: the download lives in <dir>/downloads until it is installed,
+# each byte range continues from where it stopped, and a rerun skips a download or
+# unpack that already finished for the same sha256.
 set -eu
 
 repo="talos-hq/hermes-slim"
@@ -22,18 +30,21 @@ version="latest"
 archive=""
 upgrade=false
 setup=true
+jobs=8
 dir="${HERMES_SLIM_DIR:-$HOME/.hermes-slim}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) version="$2"; shift 2 ;;
     --dir) dir="$2"; shift 2 ;;
     --archive) archive="$2"; shift 2 ;;
+    --jobs) jobs="$2"; shift 2 ;;
     --upgrade) upgrade=true; shift ;;
     --no-setup) setup=false; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
 done
+case "$jobs" in ''|*[!0-9]*|0) echo "hermes-slim: --jobs needs a positive number" >&2; exit 2 ;; esac
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-x86_64) target=darwin-x64 ;;
@@ -62,6 +73,86 @@ case "$(uname -s)-$(uname -m)" in
     esac ;;
   *) echo "hermes-slim: unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
+
+sha256() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d' ' -f1; }
+size_of() { if [ -f "$1" ]; then wc -c <"$1" | tr -d ' '; else echo 0; fi; }
+
+# Total size when the server honours byte ranges (GitHub's release CDN does), else empty.
+range_size() {
+  curl -fsSL -r 0-0 -D - -o /dev/null "$1" 2>/dev/null | tr -d '\r' |
+    sed -n 's#^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Rr][Aa][Nn][Gg][Ee]: *bytes 0-0/\([0-9][0-9]*\)$#\1#p' | tail -1
+}
+
+# Fetch byte ranges of $1 into $2.parts/<i> concurrently. A part that stopped early (network
+# drop, Ctrl-C, reboot) continues from its last byte on the next round or the next run.
+fetch_ranges() {
+  url="$1" out="$2" size="$3"
+  parts="$out.parts"
+  [ "$(cat "$parts/size" 2>/dev/null)" = "$size" ] || { rm -rf "$parts"; mkdir -p "$parts"; echo "$size" >"$parts/size"; }
+  chunk=$(( (size + jobs - 1) / jobs ))
+  round=0
+  while :; do
+    pids="" missing=0 i=0
+    while [ $((i * chunk)) -lt "$size" ]; do
+      start=$((i * chunk)) end=$((i * chunk + chunk - 1))
+      [ "$end" -lt "$size" ] || end=$((size - 1))
+      part_len=$((end - start + 1)) have="$(size_of "$parts/$i")"
+      [ "$have" -le "$part_len" ] || { : >"$parts/$i"; have=0; }
+      if [ "$have" -lt "$part_len" ]; then
+        missing=$((missing + 1))
+        curl -fsSL --connect-timeout 20 -r "$((start + have))-$end" "$url" >>"$parts/$i" 2>/dev/null &
+        pids="$pids $!"
+      fi
+      i=$((i + 1))
+    done
+    [ "$missing" -gt 0 ] || break
+    [ "$round" -lt 5 ] || { echo "hermes-slim: download of $url keeps failing; rerun to resume it" >&2; exit 1; }
+    round=$((round + 1))
+    while :; do
+      alive=0
+      for p in $pids; do kill -0 "$p" 2>/dev/null && alive=1; done
+      if [ -t 2 ]; then
+        got=0
+        for f in "$parts"/[0-9]*; do got=$((got + $(size_of "$f"))); done
+        printf '\r  %3d%%  %d / %d MiB' $((got * 100 / size)) $((got >> 20)) $((size >> 20)) >&2
+      fi
+      [ "$alive" = 1 ] || break
+      sleep 1
+    done
+    wait || true
+  done
+  [ ! -t 2 ] || printf '\n' >&2
+  i=0
+  : >"$out.tmp"
+  while [ $((i * chunk)) -lt "$size" ]; do cat "$parts/$i" >>"$out.tmp"; i=$((i + 1)); done
+  mv "$out.tmp" "$out"
+  rm -rf "$parts"
+}
+
+# fetch URL OUT [SHA256]: skip when OUT already has SHA256, otherwise download it (in parallel
+# ranges when the file is large and the server allows it) and check SHA256.
+fetch() {
+  url="$1" out="$2" want="${3:-}"
+  if [ -n "$want" ] && [ -f "$out" ] && [ "$(sha256 "$out")" = "$want" ]; then
+    echo "→ $(basename "$out") already downloaded"
+    return 0
+  fi
+  rm -f "$out"
+  size="$(range_size "$url")"
+  if [ "$jobs" -gt 1 ] && [ -n "$size" ] && [ "$size" -ge 8388608 ]; then
+    echo "→ downloading $(basename "$out") ($((size >> 20)) MiB, $jobs connections)"
+    fetch_ranges "$url" "$out" "$size"
+  else
+    echo "→ downloading $(basename "$out")"
+    curl -fSL --retry 3 -C - --progress-bar -o "$out.part" "$url"
+    mv "$out.part" "$out"
+  fi
+  if [ -n "$want" ] && [ "$(sha256 "$out")" != "$want" ]; then
+    rm -f "$out"
+    echo "hermes-slim: sha256 mismatch for $(basename "$out"); rerun to download it again" >&2
+    exit 1
+  fi
+}
 
 # Apple's bsdtar shells out to zstd. Prefer the native standalone decompressor
 # published beside the bundles rather than assuming a bsdtar has built-in support.
@@ -94,52 +185,74 @@ unpack() {
   fi
 }
 
-sha256() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d' ' -f1; }
+# The sha256 recorded in an unpacked tree marks it complete; an interrupted unpack has none.
+installed() { [ -n "$expected" ] && [ "$(cat "$1/.bundle-sha256" 2>/dev/null)" = "$expected" ]; }
+
+# Nothing to download when an earlier run already unpacked this exact bundle.
+need_bundle() { ! installed "$dir/current" && ! installed "$dir/hermes-slim.new"; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$dir/downloads"
 base=""
-if [ -n "$archive" ]; then
-  [ -f "$archive" ] || { echo "hermes-slim: no such archive: $archive" >&2; exit 1; }
-  if [ -f "$archive.sha256" ]; then
-    [ "$(cut -d' ' -f1 "$archive.sha256")" = "$(sha256 "$archive")" ] || { echo "hermes-slim: sha256 mismatch" >&2; exit 1; }
-  fi
-else
-  if [ "$version" = latest ]; then
-    base="https://github.com/$repo/releases/latest/download"
-    version="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed 's#.*/##')"
-  else
-    base="https://github.com/$repo/releases/download/$version"
-  fi
-  asset="$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$version" |
-    sed -n "s/.*\"name\": *\"\(hermes-slim-[^\"]*-$target\.tar\.zst\)\".*/\1/p" | head -1)"
-  [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release $version" >&2; exit 1; }
-  echo "→ downloading $asset"
-  curl -fSL --progress-bar -o "$tmp/$asset" "$base/$asset"
-  curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
-  [ "$(cut -d' ' -f1 "$tmp/$asset.sha256")" = "$(sha256 "$tmp/$asset")" ] || { echo "hermes-slim: sha256 mismatch" >&2; exit 1; }
-  archive="$tmp/$asset"
-fi
+expected=""
+case "$archive" in
+  http://*|https://*)
+    base="${archive%/*}"
+    curl -fsSL -o "$tmp/archive.sha256" "$archive.sha256" 2>/dev/null && expected="$(cut -d' ' -f1 "$tmp/archive.sha256")"
+    if [ -z "$expected" ] || need_bundle; then fetch "$archive" "$dir/downloads/${archive##*/}" "$expected"; fi
+    archive="$dir/downloads/${archive##*/}" ;;
+  ?*)
+    [ -f "$archive" ] || { echo "hermes-slim: no such archive: $archive" >&2; exit 1; }
+    if [ -f "$archive.sha256" ]; then
+      expected="$(cut -d' ' -f1 "$archive.sha256")"
+      [ "$expected" = "$(sha256 "$archive")" ] || { echo "hermes-slim: sha256 mismatch" >&2; exit 1; }
+    fi ;;
+  *)
+    if [ "$version" = latest ]; then
+      base="https://github.com/$repo/releases/latest/download"
+      version="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed 's#.*/##')"
+    else
+      base="https://github.com/$repo/releases/download/$version"
+    fi
+    asset="$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$version" |
+      sed -n "s/.*\"name\": *\"\(hermes-slim-[^\"]*-$target\.tar\.zst\)\".*/\1/p" | head -1)"
+    [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release $version" >&2; exit 1; }
+    curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
+    expected="$(cut -d' ' -f1 "$tmp/$asset.sha256")"
+    if need_bundle; then fetch "$base/$asset" "$dir/downloads/$asset" "$expected"; fi
+    archive="$dir/downloads/$asset" ;;
+esac
 
-echo "→ installing to $dir"
-mkdir -p "$dir"
-rm -rf "$dir/hermes-slim.new"
-mkdir "$dir/hermes-slim.new"
-unpack "$archive" "$dir/hermes-slim.new" || {
-  rm -rf "$dir/hermes-slim.new"
-  echo "hermes-slim: could not unpack $archive (incomplete or corrupt download?); the existing install is untouched" >&2
-  exit 1
-}
-rm -rf "$dir/hermes-slim.old"
-if [ -d "$dir/current" ]; then
-  # Otherwise the old gateway keeps answering /health from the replaced tree, and
-  # setup takes it for the new one.
-  "$dir/current/bin/hermes" gateway stop >/dev/null 2>&1 || true
-  mv "$dir/current" "$dir/hermes-slim.old"
+if installed "$dir/current"; then
+  echo "→ this bundle is already installed in $dir/current"
+else
+  if installed "$dir/hermes-slim.new"; then
+    echo "→ reusing the bundle unpacked by an earlier run"
+  else
+    echo "→ installing to $dir"
+    rm -rf "$dir/hermes-slim.new"
+    mkdir "$dir/hermes-slim.new"
+    unpack "$archive" "$dir/hermes-slim.new" || {
+      rm -rf "$dir/hermes-slim.new"
+      echo "hermes-slim: could not unpack $archive (incomplete or corrupt download?); the existing install is untouched" >&2
+      exit 1
+    }
+    [ -z "$expected" ] || echo "$expected" >"$dir/hermes-slim.new/.bundle-sha256"
+  fi
+  rm -rf "$dir/hermes-slim.old"
+  if [ -d "$dir/current" ]; then
+    # Otherwise the old gateway keeps answering /health from the replaced tree, and
+    # setup takes it for the new one.
+    "$dir/current/bin/hermes" gateway stop >/dev/null 2>&1 || true
+    mv "$dir/current" "$dir/hermes-slim.old"
+  fi
+  mv "$dir/hermes-slim.new" "$dir/current"
+  # Unsigned bundle: clear the download quarantine so Gatekeeper does not block the interpreter.
+  [ "$(uname -s)" = Darwin ] && xattr -dr com.apple.quarantine "$dir/current" 2>/dev/null || true
 fi
-mv "$dir/hermes-slim.new" "$dir/current"
-# Unsigned bundle: clear the download quarantine so Gatekeeper does not block the interpreter.
-[ "$(uname -s)" = Darwin ] && xattr -dr com.apple.quarantine "$dir/current" 2>/dev/null || true
+# The cached download has served its purpose once its tree is in place.
+case "$archive" in "$dir/downloads/"*) rm -f "$archive" ;; esac
 
 mkdir -p "$HOME/.local/bin"
 ln -sf "$dir/current/bin/hermes" "$HOME/.local/bin/hermes"
