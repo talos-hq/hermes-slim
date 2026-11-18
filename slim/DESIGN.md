@@ -110,6 +110,15 @@ Upstream's own workflows are disabled in this fork via the Actions API
   links `hermes` into `~/.local/bin`, runs setup with `--service`.
 - Windows: `slim/install.ps1` — same, into `%LOCALAPPDATA%\\hermes-slim`, adds `bin` to the user PATH.
 
+Both fetch the bundle over 8 parallel HTTP byte ranges (`--jobs` / `-Jobs`) into
+`<dir>/downloads`, and every stage resumes: a range continues from its last byte after a
+dropped connection or a killed run, and a rerun skips a download or unpack already finished
+for the same sha256 (`.bundle-sha256` in the unpacked tree marks it complete). Windows
+extracts with `ZipFile` rather than `Expand-Archive` plus a per-file `Unblock-File` walk:
+201s → 7s for the v0.1.0 bundle on `windows-latest`. Tests: `slim/tests/test_install_download.py`
+(install.sh) and `slim/tests/install_ps1_test.ps1` (install.ps1), both against
+`slim/tests/range_server.py`, which can drop each range mid-transfer.
+
 ## Signed binaries (Windows Smart App Control)
 Smart App Control, on by default on fresh Windows 11 installs, refuses to run or load
 any unsigned binary, and has no per-app exception: the only way past it is turning it

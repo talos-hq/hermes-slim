@@ -54,8 +54,8 @@ def main(argv=None) -> int:
         print(f"already on {current}")
         return 0
     if os.name == "nt":
-        print("rerun install.ps1 to update this bundle (it keeps your configuration):\n"
-              f"  irm https://raw.githubusercontent.com/{REPO}/main/slim/install.ps1 | iex")
+        print("rerun install.ps1 with -Upgrade to update this bundle (it keeps your configuration):\n"
+              f"  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/{REPO}/main/slim/install.ps1))) -Upgrade")
         return 1
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -73,7 +73,7 @@ def main(argv=None) -> int:
         print(f"updating {current} -> {target or args.archive.name}")
         # install.sh replaces BUNDLE (where this interpreter lives), so it runs as a
         # separate process and this one only waits for it.
-        return subprocess.run(["sh", str(script), *how, "--dir", str(BUNDLE.parent), "--upgrade"]).returncode
+        return subprocess.run(["sh", str(script), *how, "--dir", str(BUNDLE.parent), "--upgrade"], check=False).returncode
 
 
 if __name__ == "__main__":
