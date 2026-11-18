@@ -39,6 +39,8 @@ function Get-Requests { @(Get-Content (Join-Path $release "requests.log") -Error
 function Get-Starts { @(Get-Requests | Where-Object { $_ -match '=(\d+)-' -and $_ -notmatch '=0-0$' } | ForEach-Object { [long]([regex]::Match($_, '=(\d+)-').Groups[1].Value) }) }
 function Install([string]$Dir, [string[]]$More) {
     $log = Join-Path $work "install.log"
+    # Windows PowerShell 5.1 turns a child's stderr into a terminating error under Stop.
+    $ErrorActionPreference = "Continue"
     & $hostExe -NoProfile -ExecutionPolicy Bypass -File $Installer -Dir $Dir -NoSetup @More *> $log
     $script:lastLog = Get-Content $log -Raw
     $LASTEXITCODE

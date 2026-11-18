@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import re
+import sys
 import threading
 from pathlib import Path
 
@@ -78,8 +79,15 @@ def make_handler(root: Path, drop_after: int | None):
     return Handler
 
 
+class Server(http.server.ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # Clients drop idle keep-alive sockets and the server drops ranges on purpose.
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            super().handle_error(request, client_address)
+
+
 def serve(root: Path, port: int = 0, drop_after: int | None = None) -> http.server.ThreadingHTTPServer:
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(root, drop_after))
+    server = Server(("127.0.0.1", port), make_handler(root, drop_after))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
