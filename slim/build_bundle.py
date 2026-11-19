@@ -180,7 +180,7 @@ def write_stamp(app: Path, python: Path) -> None:
     as a git checkout it can move. `external`: a new bundle, not hermes update, replaces it.
     """
     described = subprocess.run(["git", "describe", "--tags", "--match", "v*", "--long"],
-                               cwd=REPO, capture_output=True, text=True).stdout.strip()
+                               cwd=REPO, capture_output=True, text=True, check=False).stdout.strip()
     tag, distance, _ = described.rsplit("-", 2) if described else ("v0.0.0", "0", "")
     run([python, REPO / "scripts" / "write_install_stamp.py", "--output", app / "install-stamp.json",
          "--base-version", tag.removeprefix("v"), "--distance", distance,
@@ -232,7 +232,7 @@ def precompile(bundle: Path, python: Path, windows: bool, work: Path) -> None:
              "sk-or-v1-" + "0" * 64, "--skip-online-checks", "--api-port", port, "--json"],
             env=env, stdout=subprocess.DEVNULL, timeout=600)
     finally:
-        subprocess.run([str(hermes), "gateway", "stop"], env=env, capture_output=True, timeout=120)
+        subprocess.run([str(hermes), "gateway", "stop"], env=env, capture_output=True, timeout=120, check=False)
     run([python, "-c", "import cli, run_agent"], env=env, cwd=bundle / "app", stdout=subprocess.DEVNULL)
     shutil.rmtree(home, ignore_errors=True)
 
@@ -299,7 +299,7 @@ def stage(target: str, wheels: Path | None, work: Path) -> Path:
         install += ["--find-links", wheels]
     log = work / "install.log"
     with open(log, "w") as f:
-        proc = subprocess.run([str(c) for c in install], cwd=REPO, env=env, stdout=f, stderr=subprocess.STDOUT)
+        proc = subprocess.run([str(c) for c in install], cwd=REPO, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=3600, check=False)
     text = log.read_text()
     print(text[-20000:])
     if proc.returncode:
@@ -345,9 +345,9 @@ def package(target: str, out: Path, work: Path) -> Path:
     bundle = work / "hermes-slim"
     python = bundle / "python" / ("python.exe" if windows else "bin/python3")
     out.mkdir(parents=True, exist_ok=True)
-    rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip() or "dev"
+    rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, timeout=60, check=False).stdout.strip() or "dev"
     version = subprocess.run(["git", "describe", "--tags", "--match", "v*"], cwd=REPO,
-                             capture_output=True, text=True).stdout.strip() or rev
+                             capture_output=True, text=True, timeout=60, check=False).stdout.strip() or rev
     (bundle / "BUNDLE.json").write_text(json.dumps(
         {"target": target, "commit": rev, "version": version, "extras": EXTRAS}, indent=2))
     name = f"hermes-slim-{rev}-{target}"

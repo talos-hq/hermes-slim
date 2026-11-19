@@ -68,7 +68,7 @@ def main() -> int:
     timed("hermes --version (warm)", version)
     total += timed("setup + gateway /health", configure)
     print(f"{'client install total':<28}{total:8.2f}s")
-    subprocess.run([hermes, "gateway", "stop"], env=env, capture_output=True, timeout=120)
+    subprocess.run([hermes, "gateway", "stop"], env=env, capture_output=True, timeout=120, check=False)
     shutil.rmtree(root, ignore_errors=True)
     return 0
 

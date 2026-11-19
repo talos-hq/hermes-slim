@@ -155,7 +155,7 @@ def _append_with_retry(command: list[str]) -> None:
         if remaining <= 0:
             raise subprocess.TimeoutExpired(command, 5)
         try:
-            subprocess.run(command, check=True, timeout=remaining, capture_output=True, text=True, env=_cli_env())
+            subprocess.run(command, check=True, timeout=remaining, capture_output=True, text=True, encoding='utf-8', errors='replace', env=_cli_env())
             return
         except subprocess.CalledProcessError as exc:
             if attempt == 3 or "sqlite3.OperationalError: database is locked" not in (exc.stderr or ""):

@@ -66,14 +66,14 @@ def main() -> int:
     step("validation rejects bad input")
     bad = subprocess.run([setup, "--non-interactive", "--first-name", "  ", "--last-name", "X",
                           "--openrouter-key", FAKE_KEY, "--no-gateway", "--json"],
-                         env=env, capture_output=True, text=True)
+                         env=env, capture_output=True, text=True, check=False)
     assert bad.returncode == 2 and "first name is required" in bad.stderr, bad
 
     step("non-interactive setup + gateway")
     proc = subprocess.run([setup, "--non-interactive", "--first-name", "  Ada ", "--last-name", " Love lace",
                            "--openrouter-key", real_key or FAKE_KEY, "--api-port", str(args.port), "--json",
                            *([] if real_key else ["--skip-online-checks"])],
-                          env=env, capture_output=True, text=True, timeout=600)
+                          env=env, capture_output=True, text=True, timeout=600, check=False)
     print(proc.stdout, proc.stderr)
     log = home / "logs" / "slim-gateway.log"
     if proc.returncode and log.exists():
@@ -101,12 +101,12 @@ def main() -> int:
     if real_key:
         step("live model round-trip")
         out = subprocess.run([hermes, "-z", "Reply with exactly: PONG"], env=env,
-                             capture_output=True, text=True, timeout=300)
+                             capture_output=True, text=True, timeout=300, check=False)
         print(out.stdout[-2000:], out.stderr[-2000:])
         assert "PONG" in out.stdout, "model did not answer"
 
     step("stop gateway")
-    subprocess.run([hermes, "gateway", "stop"], env=env, timeout=120)
+    subprocess.run([hermes, "gateway", "stop"], env=env, timeout=120, check=False)
     print("\nSMOKE TEST PASSED")
     shutil.rmtree(root, ignore_errors=True)
     return 0

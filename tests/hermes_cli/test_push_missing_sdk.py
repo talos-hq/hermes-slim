@@ -17,10 +17,10 @@ from gateway import push_delivery
 
 def _no_subscriptions_store():
     class _Store:
-        def subscriptions(self, owner):  # noqa: ANN001, D401 - minimal stub
+        def subscriptions(self, owner):
             return []
 
-        def revoke(self, owner, device_id, subscription):  # noqa: ANN001
+        def revoke(self, owner, device_id, subscription):
             raise AssertionError("revoke must not be called when signing is unavailable")
 
     return _Store()

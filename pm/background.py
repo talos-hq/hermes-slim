@@ -345,6 +345,7 @@ def _spawn() -> None:
                              close_fds=True, **kwargs)
 
     if os.name != "nt":
+        # detached-spawn: ok — the background installer daemon must outlive the CLI that kicks it.
         popen(start_new_session=True)
         return
     flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
