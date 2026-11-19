@@ -16,8 +16,10 @@ import os
 import subprocess
 import sys
 
-# Pin the native ARM64 image; runner allocation can take tens of minutes.
-DEFAULT_ARM_IMAGE = "macos-15"
+# GitHub's macos-15 arm64 pool stopped assigning runners to this repo (#122); macos-26 (what
+# macos-latest points at) is assigned within minutes. Bundles carry no code compiled for the
+# build host's OS: wheels are prebuilt and build_zstd.sh targets macOS 11.
+DEFAULT_ARM_IMAGE = "macos-26"
 OPT_IN_LABEL = "ci:bundle-macos"
 NOT_ACQUIRED = "not acquired by Runner"
 

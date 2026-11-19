@@ -5,6 +5,9 @@
 #   sh slim/build_zstd.sh OUT_DIR
 set -eu
 out="$1"
+# The binary ships to every supported Mac, not just the build runner's macOS: without this the
+# toolchain stamps the runner's SDK version as the minimum, and older Macs refuse to run it.
+export MACOSX_DEPLOYMENT_TARGET=11.0
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) target=darwin-arm64; jobs="$(sysctl -n hw.ncpu)"; ldflags= ;;
   Darwin-x86_64) target=darwin-x64; jobs="$(sysctl -n hw.ncpu)"; ldflags= ;;
@@ -30,5 +33,7 @@ case "$target" in
     otool -L "$out/zstd-$target" | awk '
       NR > 1 { print; if ($1 !~ /^\/usr\/lib\// && $1 !~ /^\/System\/Library\//) bad = 1 }
       END { exit bad }'
+    minos="$(otool -l "$out/zstd-$target" | awk '/LC_BUILD_VERSION/ { f = 1 } f && $1 == "minos" { print $2; exit }')"
+    [ "$minos" = "$MACOSX_DEPLOYMENT_TARGET" ] || { echo "zstd-$target needs macOS $minos, not $MACOSX_DEPLOYMENT_TARGET" >&2; exit 1; }
     ;;
 esac
