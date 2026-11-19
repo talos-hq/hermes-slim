@@ -57,7 +57,7 @@ def main(argv: list[str]) -> int:
     if not SOURCE.is_file():
         print(f"missing icon source: {SOURCE}", file=sys.stderr)
         return 1
-    svg = SOURCE.read_text(encoding="utf-8")
+    svg = SOURCE.read_text(encoding="utf-8-sig")
     missing = [name for name, _side, _mask in TARGETS if not (ICONS / name).is_file()]
     if args.check:
         if missing:

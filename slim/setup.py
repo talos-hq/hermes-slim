@@ -210,7 +210,7 @@ def start_gateway(service: bool, port: int, key: str, wait: float, log_path: Pat
         # With no service manager (containers, WSL without systemd, minimal servers) Hermes
         # declines to install one and still exits 0, so judge the service by /health.
         installed = subprocess.run(hermes_cmd("gateway", "install", "--force", "--start-now", "--start-on-login"),
-                                   env=env, stdin=subprocess.DEVNULL).returncode == 0
+                                   env=env, stdin=subprocess.DEVNULL, check=False).returncode == 0
         if installed and (h := wait_healthy(port, key, SERVICE_GRACE)):
             return h
         print("gateway service did not start; running the gateway in the background instead", file=sys.stderr)
