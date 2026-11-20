@@ -1,0 +1,14 @@
+# Modules a darwin-x64 first launch imports that a linux-x64 one does not. A cross
+# build precompiles these on top of its Linux warm-up. Regenerate from native bundles:
+#   python slim/cross.py warm-extras LINUX_X64_BUNDLE TARGET_BUNDLE darwin-x64
+SP/psutil/_psosx.py
+SP/truststore/_macos.py
+STD/_osx_support.py
+STD/_sysconfigdata__darwin_darwin.py
+STD/ctypes/macholib/__init__.py
+STD/ctypes/macholib/dyld.py
+STD/ctypes/macholib/dylib.py
+STD/ctypes/macholib/framework.py
+app/gateway/host_topology.py
+app/hermes_cli/gateway_multiplex_served.py
+app/plugins/web/keyless_mcp.py

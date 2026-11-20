@@ -8,6 +8,10 @@ sha256 in pm/lock.json) with every runtime dependency from uv.lock already
 installed, the Hermes source tree, and launchers. The client machine only
 unpacks it: no package resolution, no compilers, no downloads at install time.
 
+A Linux host also builds every other target (a cross build): it stages its own
+bundle first (WORK/host, or --host-work) and uses that interpreter wherever a
+native build would run the target's, with the target facts from slim/cross.py.
+
 Stdlib only, so it runs on any Python 3.11+.
 """
 
@@ -29,10 +33,13 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cross
 TARGETS = ("darwin-x64", "darwin-arm64", "win32-x64", "linux-x64-musl", "linux-x64", "linux-arm64")
-# Oldest glibc a glibc bundle runs on: 2.28 is Debian 10, Ubuntu 20.04, RHEL 8.
-# python-build-standalone itself needs only 2.17. install.sh checks the same floor.
-GLIBC_FLOOR = {"linux-x64": "x86_64-manylinux_2_28", "linux-arm64": "aarch64-manylinux_2_28"}
+# Oldest glibc a glibc bundle runs on: 2.28 is Debian 10, Ubuntu 20.04, RHEL 8 (the
+# manylinux_2_28 platforms in cross.UV_PLATFORM). python-build-standalone itself needs only
+# 2.17. install.sh checks the same floor.
+GLIBC_TARGETS = ("linux-x64", "linux-arm64")
 # Extras the slim bundle ships. Gateway + Telegram + MCP + free web search.
 # `sms` is just aiohttp, which the gateway API server (/health) needs.
 EXTRAS = ("telegram", "mcp", "ddgs", "sms")
@@ -101,6 +108,12 @@ def python_pin(target: str) -> dict:
     if name not in STRIPPED_PYTHON_SHA256:
         raise SystemExit(f"no sha256 for {name}: pm/lock.json moved the python pin; add it to STRIPPED_PYTHON_SHA256")
     return {"url": url, "sha256": STRIPPED_PYTHON_SHA256[name]}
+
+
+def python_version(target: str) -> str:
+    """X.Y.Z of the CPython the target's bundle ships."""
+    name = python_pin(target)["url"].rsplit("/", 1)[-1]
+    return name.split("-")[1].split("+")[0] if name.startswith("cpython-") else name.split(".", 1)[1].rsplit(".", 1)[0]
 
 
 def fetch(url: str, sha256: str, dest_dir: Path) -> Path:
@@ -187,10 +200,10 @@ def write_stamp(app: Path, python: Path) -> None:
          "--source", "ci", "--update-mechanism", "external"], cwd=REPO)
 
 
-def slim_python(python_root: Path, python: Path) -> None:
+def slim_python(python_root: Path, stdlib: Path) -> None:
     """Drop the stdlib parts a bundle never runs."""
-    stdlib = Path(subprocess.run([python, "-c", "import os; print(os.path.dirname(os.__file__))"],
-                                 capture_output=True, text=True, check=True).stdout.strip())
+    if not (stdlib / "os.py").is_file():
+        raise SystemExit(f"no stdlib at {stdlib}")
     for name in STDLIB_PRUNE:
         p = stdlib / name
         if p.is_dir():
@@ -249,9 +262,43 @@ def precompile(bundle: Path, python: Path, windows: bool, work: Path) -> None:
         stdout=subprocess.DEVNULL)
 
 
-def stage(target: str, wheels: Path | None, work: Path) -> Path:
+def precompile_cross(bundle: Path, target: str, runner: Path, host_work: Path, work: Path) -> None:
+    """precompile() for a target this host cannot run: the host bundle's warm-up list plus
+    slim/warm/<target>.txt, compiled by the host's CPython of the same version (bytecode
+    does not depend on the platform)."""
+    version, host_version = python_version(target), python_version(host_target())
+    if version.split(".")[:2] != host_version.split(".")[:2]:
+        raise SystemExit(f"cross build needs the same CPython minor: host {host_version}, {target} {version}")
+    host_bundle = host_work / "hermes-slim"
+    keys = {cross.neutral(Path(line).relative_to(host_bundle).as_posix(), host_target(), host_version)
+            for line in (host_work / "warm-modules.txt").read_text().splitlines() if line}
+    keys.update(cross.warm_extras(target))
+    # The interpreter archive ships a few timestamp-based .pycs; a native build replaces them too.
+    for pyc in bundle.rglob("*.pyc"):
+        pyc.unlink()
+    sources = sorted(str(p) for p in (bundle / cross.localize(k, target, version) for k in keys) if p.is_file())
+    listing = work / "warm-modules.txt"
+    listing.write_text("\n".join(sources) + "\n")
+    print(f"precompiling {len(sources)} modules a {target} first launch imports", flush=True)
+    run([runner, "-m", "compileall", "-q", "-i", listing, "--invalidation-mode", "unchecked-hash"],
+        stdout=subprocess.DEVNULL)
+
+
+def host_runner(wheels: Path | None, host_work: Path) -> Path:
+    """The interpreter of this host's own bundle, staged (with its warm-up) when missing."""
+    python = host_work / "hermes-slim" / "python" / "bin" / "python3"
+    if not (python.is_file() and (host_work / "warm-modules.txt").is_file()):
+        print(f"staging the {host_target()} bundle to run the cross build", flush=True)
+        stage(host_target(), wheels, host_work, host_work)
+    return python
+
+
+def stage(target: str, wheels: Path | None, work: Path, host_work: Path) -> Path:
     """Assemble work/hermes-slim; package() turns it into the archive."""
     windows = target.startswith("win32")
+    cross_build = target != host_target()
+    version = python_version(target)
+    runner = host_runner(wheels, host_work) if cross_build else None
     bundle = work / "hermes-slim"
     if bundle.exists():
         shutil.rmtree(bundle)
@@ -273,13 +320,15 @@ def stage(target: str, wheels: Path | None, work: Path) -> Path:
     else:
         unpack(fetch(py_pin["url"], py_pin["sha256"], downloads), bundle)  # -> bundle/python/
     python = bundle / "python" / ("python.exe" if windows else "bin/python3")
+    # The interpreter that runs build steps: the target's own, or the host bundle's.
+    runner = runner or python
 
     uv_dir = work / "uv"
     if not uv_dir.exists():
         uv_pin = pin("uv", host_target())
         unpack(fetch(uv_pin["url"], uv_pin["sha256"], downloads), uv_dir)
     uv = find_exe(uv_dir, ("uv.exe", "uv"))
-    if not windows:
+    if sys.platform != "win32":
         uv.chmod(0o755)
 
     env = dict(os.environ, UV_NO_CONFIG="1", UV_PYTHON_DOWNLOADS="never")
@@ -290,11 +339,19 @@ def stage(target: str, wheels: Path | None, work: Path) -> Path:
         export += ["--extra", extra]
     run(export, cwd=REPO, env=env)
 
-    install = [uv, "pip", "install", "--python", python, "--break-system-packages", "--no-deps", "--no-build", "-r", reqs]
-    if target in GLIBC_FLOOR:
-        # Otherwise uv picks wheels for the build host's glibc, and a bundle built on a new
-        # distro refuses to load on an older one.
-        install += ["--python-platform", GLIBC_FLOOR[target]]
+    if cross_build:
+        # Resolve the markers here: uv's Windows platform calls the machine x86_64, not AMD64.
+        pins = cross.select_requirements(reqs.read_text(), cross.marker_env(target, version))
+        reqs.write_text("\n".join(pins) + "\n")
+        install = [uv, "pip", "install", "--python", runner, "--target", bundle / cross.site_packages(target, version),
+                   "--python-platform", cross.UV_PLATFORM[target], "--python-version", version,
+                   "--no-deps", "--no-build", "-r", reqs]
+    else:
+        install = [uv, "pip", "install", "--python", python, "--break-system-packages", "--no-deps", "--no-build", "-r", reqs]
+        if target in GLIBC_TARGETS:
+            # Otherwise uv picks wheels for the build host's glibc, and a bundle built on a new
+            # distro refuses to load on an older one.
+            install += ["--python-platform", cross.UV_PLATFORM[target]]
     if wheels and wheels.is_dir():
         install += ["--find-links", wheels]
     log = work / "install.log"
@@ -306,6 +363,12 @@ def stage(target: str, wheels: Path | None, work: Path) -> Path:
         # --no-build: a package with no wheel for this target fails here instead of compiling.
         # Fix it by publishing a wheel to hermes-slim/wheels, not by compiling in the bundle.
         raise SystemExit(f"dependency install failed on {target} (see log above)")
+    if cross_build:
+        # --target leaves uv's lock and console scripts for the build host (the launchers
+        # never use them; a native install puts its own in python/bin).
+        sp = bundle / cross.site_packages(target, version)
+        shutil.rmtree(sp / "bin", ignore_errors=True)
+        (sp / ".lock").unlink(missing_ok=True)
 
     app = bundle / "app"
     # What a commit would hold (tracked, plus new files not gitignored): a working tree
@@ -319,10 +382,13 @@ def stage(target: str, wheels: Path | None, work: Path) -> Path:
         if src.is_file():
             (app / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, app / rel, follow_symlinks=False)
-    write_stamp(app, python)
+    write_stamp(app, runner)
     write_launchers(bundle, windows)
-    slim_python(bundle / "python", python)
-    precompile(bundle, python, windows, work)
+    slim_python(bundle / "python", bundle / cross.stdlib_dir(target, version))
+    if cross_build:
+        precompile_cross(bundle, target, runner, host_work, work)
+    else:
+        precompile(bundle, python, windows, work)
     if windows:
         write_unsigned_list(bundle, work)
     return bundle
@@ -340,10 +406,12 @@ def write_unsigned_list(bundle: Path, work: Path) -> None:
     print(f"{len(signed)} binaries signed upstream, {len(unsigned)} to sign: {work / 'unsigned.txt'}", flush=True)
 
 
-def package(target: str, out: Path, work: Path) -> Path:
+def package(target: str, out: Path, work: Path, host_work: Path) -> Path:
     windows = target.startswith("win32")
     bundle = work / "hermes-slim"
     python = bundle / "python" / ("python.exe" if windows else "bin/python3")
+    if target != host_target():
+        python = host_work / "hermes-slim" / "python" / "bin" / "python3"
     out.mkdir(parents=True, exist_ok=True)
     rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, timeout=60, check=False).stdout.strip() or "dev"
     version = subprocess.run(["git", "describe", "--tags", "--match", "v*"], cwd=REPO,
@@ -374,19 +442,23 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=REPO / "dist")
     ap.add_argument("--wheels", type=Path, help="directory of extra wheels (hermes-slim/wheels release assets)")
     ap.add_argument("--work", type=Path, help="scratch directory (default: a temp dir)")
+    ap.add_argument("--host-work", type=Path,
+                    help="cross builds: where this host's own bundle is staged and reused (default: WORK/host)")
     step = ap.add_mutually_exclusive_group()
     step.add_argument("--stage-only", action="store_true",
                       help="assemble WORK/hermes-slim and stop (Windows CI signs it next)")
     step.add_argument("--package-only", action="store_true", help="archive an already staged WORK/hermes-slim")
     args = ap.parse_args()
-    if args.target != host_target():
-        raise SystemExit(f"bundles build natively: host is {host_target()}, asked for {args.target}")
-    work = args.work or Path(tempfile.mkdtemp(prefix="hermes-slim-build-"))
+    # slim/warm/<target>.txt lists what a target imports beyond a linux-x64 first launch.
+    if args.target != host_target() and host_target() != "linux-x64":
+        raise SystemExit(f"cross builds run on linux-x64: host is {host_target()}, asked for {args.target}")
+    work = (args.work or Path(tempfile.mkdtemp(prefix="hermes-slim-build-"))).resolve()
     work.mkdir(parents=True, exist_ok=True)
+    host_work = (args.host_work or work / "host").resolve()
     if not args.package_only:
-        stage(args.target, args.wheels, work.resolve())
+        stage(args.target, args.wheels, work, host_work)
     if not args.stage_only:
-        package(args.target, args.out.resolve(), work.resolve())
+        package(args.target, args.out.resolve(), work, host_work)
 
 
 if __name__ == "__main__":

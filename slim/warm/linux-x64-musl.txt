@@ -1,0 +1,4 @@
+# Modules a linux-x64-musl first launch imports that a linux-x64 one does not. A cross
+# build precompiles these on top of its Linux warm-up. Regenerate from native bundles:
+#   python slim/cross.py warm-extras LINUX_X64_BUNDLE TARGET_BUNDLE linux-x64-musl
+STD/_sysconfigdata__linux_x86_64-linux-musl.py
