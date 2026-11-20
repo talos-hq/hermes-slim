@@ -1,0 +1,4 @@
+# Modules a linux-arm64 first launch imports that a linux-x64 one does not. A cross
+# build precompiles these on top of its Linux warm-up. Regenerate from native bundles:
+#   python slim/cross.py warm-extras LINUX_X64_BUNDLE TARGET_BUNDLE linux-arm64
+STD/_sysconfigdata__linux_aarch64-linux-gnu.py

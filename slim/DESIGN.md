@@ -54,6 +54,26 @@ How a bundle is built (`slim/build_bundle.py`, native on each target):
 4. Copy the Hermes source (minus desktop app, website, tests) to `app/`, add
    launchers that set `PYTHONPATH=app` and `HERMES_SLIM=1`.
 
+### Cross builds (#128)
+A Linux host builds every target: `build_bundle.py --target win32-x64` on Linux.
+Nothing in a bundle is compiled for the build host, so the only steps that need
+the target are the ones that run its interpreter. The cross build stages the
+host's own bundle first (`WORK/host`, shared between targets with `--host-work`)
+and uses it in their place:
+- **Dependencies:** `uv pip install --target <site-packages> --python-platform
+  <triple>` (`slim/cross.py` `UV_PLATFORM`). The build evaluates the exported
+  markers itself against the target's marker environment and gives uv a
+  marker-free list: uv calls the Windows machine `x86_64`, CPython says `AMD64`,
+  and uv alone silently dropped `nemo-relay` and `ruamel-yaml-clib` there.
+- **Bytecode:** the host's warm-up module list plus `slim/warm/<target>.txt`
+  (modules that target's first launch imports beyond Linux; ~300 on Windows,
+  ~10 on macOS), compiled by the host's CPython 3.14.9. Bytecode is the same on
+  every platform. Regenerate a list from native bundles with
+  `python slim/cross.py warm-extras`.
+- **Differences from a native build:** no console-script wrappers in
+  `python/bin` / `python/Scripts` (the launchers never use them), and Windows
+  text files keep the repository's LF line endings.
+
 ### Why macOS x64 broke upstream
 `cryptography==50.0.2` (a core dependency) ships no macOS x86_64 wheel, so
 Intel Macs compile it from source, which needs Rust and OpenSSL headers.
