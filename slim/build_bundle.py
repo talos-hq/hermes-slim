@@ -266,11 +266,16 @@ def precompile_cross(bundle: Path, target: str, runner: Path, host_work: Path, w
     """precompile() for a target this host cannot run: the host bundle's warm-up list plus
     slim/warm/<target>.txt, compiled by the host's CPython of the same version (bytecode
     does not depend on the platform)."""
-    version = python_version(target)
+    version, host_version = python_version(target), python_version(host_target())
+    if version.split(".")[:2] != host_version.split(".")[:2]:
+        raise SystemExit(f"cross build needs the same CPython minor: host {host_version}, {target} {version}")
     host_bundle = host_work / "hermes-slim"
-    keys = {cross.neutral(Path(line).relative_to(host_bundle).as_posix(), host_target(), version)
+    keys = {cross.neutral(Path(line).relative_to(host_bundle).as_posix(), host_target(), host_version)
             for line in (host_work / "warm-modules.txt").read_text().splitlines() if line}
     keys.update(cross.warm_extras(target))
+    # The interpreter archive ships a few timestamp-based .pycs; a native build replaces them too.
+    for pyc in bundle.rglob("*.pyc"):
+        pyc.unlink()
     sources = sorted(str(p) for p in (bundle / cross.localize(k, target, version) for k in keys) if p.is_file())
     listing = work / "warm-modules.txt"
     listing.write_text("\n".join(sources) + "\n")
@@ -444,8 +449,9 @@ def main() -> None:
                       help="assemble WORK/hermes-slim and stop (Windows CI signs it next)")
     step.add_argument("--package-only", action="store_true", help="archive an already staged WORK/hermes-slim")
     args = ap.parse_args()
-    if args.target != host_target() and not sys.platform.startswith("linux"):
-        raise SystemExit(f"cross builds run on Linux: host is {host_target()}, asked for {args.target}")
+    # slim/warm/<target>.txt lists what a target imports beyond a linux-x64 first launch.
+    if args.target != host_target() and host_target() != "linux-x64":
+        raise SystemExit(f"cross builds run on linux-x64: host is {host_target()}, asked for {args.target}")
     work = (args.work or Path(tempfile.mkdtemp(prefix="hermes-slim-build-"))).resolve()
     work.mkdir(parents=True, exist_ok=True)
     host_work = (args.host_work or work / "host").resolve()

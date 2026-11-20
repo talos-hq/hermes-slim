@@ -3,7 +3,9 @@
 The requirement lines are verbatim from `uv export` of this repository's uv.lock.
 """
 
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -61,6 +63,10 @@ class SelectRequirements(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("uv"), "needs uv")
     def test_uv_installs_the_selection_for_windows(self):
+        try:
+            socket.create_connection(("pypi.org", 443), timeout=5).close()
+        except OSError:
+            self.skipTest("needs the package index")
         # What the cross build hands uv: with the markers resolved here, uv cannot drop them.
         with tempfile.TemporaryDirectory() as tmp:
             reqs = Path(tmp) / "reqs.txt"
@@ -68,7 +74,7 @@ class SelectRequirements(unittest.TestCase):
             out = subprocess.run(["uv", "pip", "install", "--dry-run", "--target", str(Path(tmp) / "t"), "--python-platform",
                                   cross.UV_PLATFORM["win32-x64"], "--python-version", "3.14.9", "--no-deps", "--no-build",
                                   "-r", str(reqs)], capture_output=True, text=True, timeout=300, check=False,
-                                 env={**__import__("os").environ, "UV_NO_CONFIG": "1"})
+                                 env={**os.environ, "UV_NO_CONFIG": "1"})
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertIn("nemo-relay==0.10.3", out.stderr)
             self.assertIn("ruamel-yaml-clib==0.2.15", out.stderr)
@@ -82,11 +88,16 @@ class Paths(unittest.TestCase):
         self.assertEqual(cross.localize("SP/x.py", "win32-x64", "3.14.9"), "python/Lib/site-packages/x.py")
         self.assertEqual(cross.localize("STD/x.py", "darwin-arm64", "3.14.9"), "python/lib/python3.14/x.py")
 
-    def test_warm_extras_exist_for_every_cross_target(self):
-        # The Windows first launch imports ~300 modules a Linux one never does.
-        self.assertGreater(len(cross.warm_extras("win32-x64")), 100)
-        for target in ("darwin-x64", "darwin-arm64"):
-            self.assertTrue(cross.warm_extras(target), target)
+    def test_warm_extras_localize_into_each_cross_target(self):
+        # Every listed module must map to a real bundle path, or the cross build skips it.
+        for target in cross.UV_PLATFORM:
+            if target == "linux-x64":
+                continue
+            keys = cross.warm_extras(target)
+            self.assertTrue(keys, f"slim/warm/{target}.txt is missing")
+            for key in keys:
+                self.assertRegex(key, r"^(SP|STD|app)/.+\.py$", target)
+                self.assertTrue(cross.localize(key, target, "3.14.9").startswith(("python/", "app/")), key)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ hermes-slim-<ver>-<target>.{tar.zst|zip}
 Client install = download → verify sha256 → unpack → run setup. No network
 package resolution, no compilers, no `curl | sh`.
 
-How a bundle is built (`slim/build_bundle.py`, native on each target):
+How a bundle is built (`slim/build_bundle.py`; natively, or on Linux for any target as below):
 1. Unpack the pinned CPython.
 2. `uv export --frozen` the lock for core + extras `telegram mcp ddgs sms`
    (`sms` = aiohttp, which the gateway's `/health` API server needs).
@@ -55,7 +55,7 @@ How a bundle is built (`slim/build_bundle.py`, native on each target):
    launchers that set `PYTHONPATH=app` and `HERMES_SLIM=1`.
 
 ### Cross builds (#128)
-A Linux host builds every target: `build_bundle.py --target win32-x64` on Linux.
+A linux-x64 host builds every target: `build_bundle.py --target win32-x64` on Linux.
 Nothing in a bundle is compiled for the build host, so the only steps that need
 the target are the ones that run its interpreter. The cross build stages the
 host's own bundle first (`WORK/host`, shared between targets with `--host-work`)
