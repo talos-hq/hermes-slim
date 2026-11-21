@@ -50,8 +50,8 @@ class DownloadTests(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.home), PATH=f"{commands}:{os.environ['PATH']}")
         self.env.pop("HERMES_SLIM_DIR", None)
 
-    def serve(self, drop_after=None):
-        server = range_server.serve(self.release, drop_after=drop_after)
+    def serve(self, drop_after=None, delay=0.0):
+        server = range_server.serve(self.release, drop_after=drop_after, delay=delay)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return f"http://127.0.0.1:{server.server_address[1]}/{ASSET}"
@@ -79,6 +79,19 @@ class DownloadTests(unittest.TestCase):
         self.assert_installed(result)
         ranges = [line.split(" ", 2)[2] for line in self.requests()]
         self.assertGreaterEqual(len([r for r in ranges if r and r != "bytes=0-0"]), 4, ranges)
+
+    def test_ranges_are_in_flight_at_the_same_time(self):
+        # Each response waits 0.3 s, so ranges overlap if and only if they were requested together.
+        result = self.install(self.serve(delay=0.3), "--jobs", "4")
+        self.assert_installed(result)
+        spans = []
+        for line in (self.release / "timing.log").read_text().splitlines():
+            start, end, method, path, rng = line.split(" ", 4)
+            if method == "GET" and path == f"/{ASSET}" and rng and rng != "bytes=0-0":
+                spans.append((float(start), float(end)))
+        # Some range must start before another one has finished.
+        concurrent = any(a[0] < b[1] and b[0] < a[1] for i, a in enumerate(spans) for b in spans[i + 1:])
+        self.assertTrue(concurrent, spans)
 
     def test_dropped_connections_resume_from_the_last_byte(self):
         result = self.install(self.serve(drop_after=2**20), "--jobs", "4")
