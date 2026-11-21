@@ -1,7 +1,7 @@
 ---
 name: computer-use
 description: "Drive the desktop background-first; escalate on signal."
-version: 2.1.0
+version: 2.2.0
 author: Francesco Bonacci (f-trycua), Hermes Agent
 license: MIT
 platforms: [macos, windows, linux]
@@ -33,6 +33,65 @@ wrapper translates into the driver's `element_token` handle. If you see a
 driver-side error mentioning `snapshot_id`, `element_token`, or "no reviewed
 risk classification", you (or a stale description) called the raw driver
 vocabulary — go back to the actions below.
+
+## When to use it
+
+Use `computer_use` when the task needs the user's real desktop: native apps
+(file managers, mail, chat, design tools, games), OS dialogs, or browser
+*chrome*. Prefer `browser_exec` / `browser_cdp` for web page content,
+`read_file` / `write_file` / `patch` for files and `terminal` for commands —
+they are faster and more reliable than driving a GUI.
+
+## Availability, install and repair
+
+Computer Use is **on by default**. Hermes ships a pinned, checksum-verified
+cua-driver (hermes-slim bakes it into the bundle; a regular install gets it
+from Hermes PM), and if it is missing or off-pin the first `computer_use`
+call installs or repairs it before acting.
+
+- **The tool is missing from your tool list** → it is usually only deferred:
+  find it with `tool_search` ("computer use") and call it through the bridge.
+  If the search finds nothing, the toolset is disabled or the driver cannot be
+  provisioned here. Ask the user to run (or run with
+  `terminal`, it needs no human):
+  `hermes computer-use install` (install/repair the pinned driver), then
+  `hermes computer-use status` (version, approvals, display). Re-enable the
+  toolset with `hermes tools` → Computer Use if it was switched off.
+- **Error mentions "not installed" / "runtime contract"** → same:
+  `hermes computer-use install`. With `HERMES_CUA_DRIVER_CMD` set, Hermes
+  never replaces that binary; the user must update or unset it.
+- **The user declined it** (`--skip-computer-use`, `hermes pm install
+  --without cua-driver`) → `hermes pm install cua-driver` opts back in.
+- **No build for this platform** (musl/Alpine Linux, Android/Termux, BSD) →
+  cua-driver publishes none; use `browser_exec` / `browser_cdp` and `terminal`.
+- Anything unclear → `hermes computer-use doctor` prints the driver's own
+  health matrix plus Hermes' display diagnosis.
+
+## Permissions: full access, no prompts (default)
+
+`computer_use.auto_approve: true` is the default: Hermes does not ask before
+desktop actions, and cua-driver runs its private `unrestricted` session so the
+driver does not stop to ask either. Do not tell the user to approve each
+click. If they set `computer_use.auto_approve: false`, every state-changing
+action (and every foreground/raise) asks first and the driver uses its
+`standard` boundary; a `permission_mode: bounded` manifest is kept as
+configured. The hard blocks (log out, lock screen, dangerous shell text typed
+into a window) apply in every mode, and the safety rules below still bind you.
+
+## Platform caveats
+
+| Platform | What to know |
+|---|---|
+| **macOS** | The OS itself must grant **Accessibility** and **Screen Recording** to CuaDriver (`com.trycua.driver`), not to Hermes. Hermes asks once — at setup or on the first `computer_use` call — and never re-prompts. If captures are empty or input is refused, have the user approve CuaDriver in System Settings → Privacy & Security, or run `hermes computer-use permissions grant` to raise the dialog again. A grant that shows ON but fails after a driver update is stale: `hermes computer-use permissions status` prints the `tccutil reset` fix. |
+| **Windows** | No permission dialog. The first run may show a SmartScreen prompt for the cua-driver UIAccess helper. Over SSH (Session 0) there is no interactive desktop: set `computer_use.autostart: true` and run `hermes computer-use install` from the console/RDP session once. |
+| **Linux, X11** | Fully supported (X11 + AT-SPI). |
+| **Linux, Wayland on Hyprland / Sway / labwc / river / Wayfire** | Hermes turns on cua-driver's native Wayland backend automatically (`computer_use.native_wayland: auto`); native and XWayland windows both work. |
+| **Linux, Wayland on GNOME / KDE Plasma** | cua-driver sees **only XWayland apps**; native Wayland windows do not appear in `list_windows` and full-screen capture fails. Fallbacks, in order: use `browser_exec` / `browser_cdp` for anything web; relaunch the target app under XWayland (Qt `QT_QPA_PLATFORM=xcb`, GTK `GDK_BACKEND=x11`, Chromium/Electron `--ozone-platform=x11`); or work on Hermes' own X11 screen (`hermes computer-use screen start`). On GNOME the user can add native support by installing cua's Shell helper (`wayland-helper/install.sh` in the driver directory, then log out/in) and setting `computer_use.native_wayland: true`. |
+| **Linux, no display** (server, SSH) | Start Hermes' own desktop: `hermes computer-use screen start` (or `bot_desktop.auto_start: true`). |
+
+An empty `list_windows` is a diagnosis, not a dead end: the error text and
+`hermes computer-use status` say which row above applies (including a stale
+`XAUTHORITY`, which Hermes repairs when the session has one live cookie).
 
 ## The canonical workflow
 
@@ -155,9 +214,9 @@ Walk it in order:
    `code:"background_unavailable"`, or a verified pixel no-op,
    re-issue the SAME action with `delivery_mode="foreground"`. This briefly
    raises the window and restores focus after; pair with `bring_to_front=True`
-   for a short sequence to avoid per-call flashes. It needs its own approval
-   (it's a visible focus change) and is only appropriate when the user isn't
-   actively working. Classic cases: Electron/Chromium consent dialogs (e.g.
+   for a short sequence to avoid per-call flashes. It is a visible focus
+   change (its own approval when `computer_use.auto_approve` is off) and is only
+   appropriate when the user isn't actively working. Classic cases: Electron/Chromium consent dialogs (e.g.
    tldraw offline's "Run Script"), DirectInput games, raw-input canvases.
 5. **Keystrokes verified-lost on a KDE/Qt editor → use the app's own I/O.**
    Some Qt text components (KTextEditor: Kate, KWrite, KDevelop) discard
@@ -298,8 +357,8 @@ in your conversation context.
 
 | Symptom | Likely cause + remedy |
 |---|---|
-| `cua-driver not installed` | Run `hermes computer-use install`, or `hermes tools` and enable Computer Use |
-| Captures consistently return empty / "no on-screen window" | On Linux: DISPLAY may not be set (X11) or you're on pure Wayland — ask the user to run `hermes computer-use doctor`. On Windows: you may be in Session 0 (SSH session) instead of the interactive desktop — see the cua-driver `WINDOWS.md` deep-dive |
+| `cua-driver not installed` | Run `hermes computer-use install` (with `terminal`), or `hermes tools` and enable Computer Use |
+| Captures consistently return empty / "no on-screen window" | Read the error's display diagnosis and the **Platform caveats** table: Linux GNOME/KDE Wayland sees only XWayland apps, a server has no display, macOS lacks the TCC grant. On Windows you may be in Session 0 (SSH) instead of the interactive desktop |
 | `code:"stale"` / "element_token is stale" | Indices belong to one snapshot. Re-`capture`, read the new indices, then act. Never reuse an index across a capture |
 | "bare element_index is not accepted" / `snapshot_id_required` | The driver saw a raw index without its token. This is a wrapper defect, not something you fix by passing `snapshot_id` (Hermes has no such argument). Re-capture once; if it repeats, tell the user to run `hermes update` and fall back to `coordinate=[x, y]` from the capture's bounds meanwhile |
 | "tool 'capture' has no reviewed risk classification" / `Unknown tool` | Something called the driver's MCP vocabulary directly (`capture`, `screenshot`, `get_window_state`, `click` with raw args). Only the `computer_use(action=…)` vocabulary in this file exists on the Hermes side |
