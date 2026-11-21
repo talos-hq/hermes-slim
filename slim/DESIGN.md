@@ -131,7 +131,9 @@ Upstream's own workflows are disabled in this fork via the Actions API
 - Windows: `slim/install.ps1` — same, into `%LOCALAPPDATA%\\hermes-slim`, adds `bin` to the user PATH.
 
 Both fetch the bundle over 8 parallel HTTP byte ranges (`--jobs` / `-Jobs`) into
-`<dir>/downloads`, and every stage resumes: a range continues from its last byte after a
+`<dir>/downloads`. install.sh reads the tag and asset names from one releases API call, and on a
+host without zstd it starts the standalone decompressor (and its checksum) in the background
+before the bundle, so nothing independent queues behind the bundle (#144). Every stage resumes: a range continues from its last byte after a
 dropped connection or a killed run, and a rerun skips a download or unpack already finished
 for the same sha256 (`.bundle-sha256` in the unpacked tree marks it complete). Windows
 extracts with `ZipFile` rather than `Expand-Archive` plus a per-file `Unblock-File` walk:

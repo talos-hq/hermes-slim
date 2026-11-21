@@ -161,14 +161,30 @@ case "$target" in
   darwin-arm64|darwin-x64) zstd_asset="zstd-$target" ;;
   *) zstd_asset="" ;;
 esac
+# Without a zstd here, start fetching the standalone decompressor (and its checksum) in the
+# background as soon as the release location is known, so it downloads alongside the
+# bundle's ranges instead of after them. unpack() waits for it and checks it.
+helper_pids=""
+start_helper() {
+  if [ -z "$base" ] || [ -z "$zstd_asset" ] || command -v zstd >/dev/null 2>&1; then return 0; fi
+  echo "→ no zstd here; fetching a standalone decompressor alongside the bundle"
+  curl -fsSL --retry 3 -o "$tmp/zstd" "$base/$zstd_asset" 2>/dev/null &
+  helper_pids="$!"
+  curl -fsSL --retry 3 -o "$tmp/zstd.sha256" "$base/$zstd_asset.sha256" 2>/dev/null &
+  helper_pids="$helper_pids $!"
+}
 unpack() {
   if command -v zstd >/dev/null 2>&1; then
     zstd -dcq "$1" | tar -xf - -C "$2" --strip-components 1
   elif [ -n "$zstd_asset" ]; then
     if [ -n "$base" ]; then
-      echo "→ no zstd here; fetching a standalone decompressor"
-      curl -fsSL -o "$tmp/zstd" "$base/$zstd_asset"
-      curl -fsSL -o "$tmp/zstd.sha256" "$base/$zstd_asset.sha256"
+      # fetch_ranges' `wait` may already have reaped these; the checksum below is the real test.
+      for p in $helper_pids; do wait "$p" 2>/dev/null || true; done
+      if [ ! -s "$tmp/zstd" ] || [ ! -s "$tmp/zstd.sha256" ]; then
+        echo "→ fetching the standalone decompressor"
+        curl -fsSL --retry 3 -o "$tmp/zstd" "$base/$zstd_asset"
+        curl -fsSL --retry 3 -o "$tmp/zstd.sha256" "$base/$zstd_asset.sha256"
+      fi
     else
       cp "$(dirname "$1")/$zstd_asset" "$tmp/zstd" 2>/dev/null &&
         cp "$(dirname "$1")/$zstd_asset.sha256" "$tmp/zstd.sha256" 2>/dev/null ||
@@ -199,6 +215,7 @@ expected=""
 case "$archive" in
   http://*|https://*)
     base="${archive%/*}"
+    start_helper
     curl -fsSL -o "$tmp/archive.sha256" "$archive.sha256" 2>/dev/null && expected="$(cut -d' ' -f1 "$tmp/archive.sha256")"
     if [ -z "$expected" ] || need_bundle; then fetch "$archive" "$dir/downloads/${archive##*/}" "$expected"; fi
     archive="$dir/downloads/${archive##*/}" ;;
@@ -209,15 +226,16 @@ case "$archive" in
       [ "$expected" = "$(sha256 "$archive")" ] || { echo "hermes-slim: sha256 mismatch" >&2; exit 1; }
     fi ;;
   *)
-    if [ "$version" = latest ]; then
-      base="https://github.com/$repo/releases/latest/download"
-      version="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed 's#.*/##')"
-    else
-      base="https://github.com/$repo/releases/download/$version"
-    fi
-    asset="$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$version" |
-      sed -n "s/.*\"name\": *\"\(hermes-slim-[^\"]*-$target\.tar\.zst\)\".*/\1/p" | head -1)"
-    [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release $version" >&2; exit 1; }
+    # One API call gives both the tag and the asset names.
+    if [ "$version" = latest ]; then release_api="releases/latest"; else release_api="releases/tags/$version"; fi
+    curl -fsSL "https://api.github.com/repos/$repo/$release_api" >"$tmp/release.json"
+    tag="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/release.json" | head -1)"
+    [ -z "$tag" ] || version="$tag"
+    [ "$version" != latest ] || { echo "hermes-slim: could not read the latest release of $repo" >&2; exit 1; }
+    asset="$(sed -n "s/.*\"name\": *\"\(hermes-slim-[^\"]*-$target\.tar\.zst\)\".*/\1/p" "$tmp/release.json" | head -1)"
+    [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release ${version:-$release_api}" >&2; exit 1; }
+    base="https://github.com/$repo/releases/download/$version"
+    start_helper
     curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
     expected="$(cut -d' ' -f1 "$tmp/$asset.sha256")"
     if need_bundle; then fetch "$base/$asset" "$dir/downloads/$asset" "$expected"; fi
