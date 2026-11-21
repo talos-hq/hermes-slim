@@ -1,12 +1,13 @@
 """A static HTTP server with byte ranges and optional dropped connections.
 
-    python range_server.py DIR [--port 0] [--drop-after BYTES]
+    python range_server.py DIR [--port 0] [--drop-after BYTES] [--delay SECONDS]
 
 Prints the port it listens on, then serves DIR. With --drop-after, the first response to
 each distinct Range closes the connection after that many bytes, the way a flaky network
 does, so installers must resume. Requests go to DIR/requests.log, one per line, and
 DIR/timing.log records `START END METHOD PATH RANGE` (epoch seconds) when each response
-ends, so a test can tell whether requests overlapped.
+ends, so a test can tell whether requests overlapped. --delay holds every GET that long
+before its body, so concurrent requests overlap measurably even on loopback.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import time
 from pathlib import Path
 
 
-def make_handler(root: Path, drop_after: int | None):
+def make_handler(root: Path, drop_after: int | None, delay: float = 0.0):
     dropped: set[str] = set()
     lock = threading.Lock()
 
@@ -77,6 +78,8 @@ def make_handler(root: Path, drop_after: int | None):
             self.end_headers()
             if not body:
                 return
+            if delay:
+                time.sleep(delay)
             key = f"{self.path} {rng}"
             with lock:
                 drop = drop_after is not None and len(chunk) > drop_after and key not in dropped
@@ -100,8 +103,8 @@ class Server(http.server.ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def serve(root: Path, port: int = 0, drop_after: int | None = None) -> http.server.ThreadingHTTPServer:
-    server = Server(("127.0.0.1", port), make_handler(root, drop_after))
+def serve(root: Path, port: int = 0, drop_after: int | None = None, delay: float = 0.0) -> http.server.ThreadingHTTPServer:
+    server = Server(("127.0.0.1", port), make_handler(root, drop_after, delay))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -111,8 +114,9 @@ def main() -> None:
     ap.add_argument("root", type=Path)
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--drop-after", type=int)
+    ap.add_argument("--delay", type=float, default=0.0)
     args = ap.parse_args()
-    server = serve(args.root.resolve(), args.port, args.drop_after)
+    server = serve(args.root.resolve(), args.port, args.drop_after, args.delay)
     print(server.server_address[1], flush=True)
     threading.Event().wait()
 
