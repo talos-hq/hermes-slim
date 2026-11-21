@@ -166,6 +166,18 @@ def grant_computer_use_approvals(monkeypatch):
 
 
 @pytest.fixture
+def computer_use_prompting():
+    """``computer_use.auto_approve: false`` in the test profile's config.yaml: the opt-out where desktop actions
+    go through the approval gate and cua-driver keeps its configured mode. The default is full permissions."""
+    from hermes_cli.config import load_config, save_config
+
+    cfg = load_config()
+    cfg.setdefault("computer_use", {})["auto_approve"] = False
+    save_config(cfg)
+    yield
+
+
+@pytest.fixture
 def web_registry_populated():
     """Populate the web-search-provider registry for one test, then reset."""
     register_all_web_providers()

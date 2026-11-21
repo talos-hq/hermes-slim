@@ -72,21 +72,62 @@ def _wsl_windows_path_to_posix(path: str) -> str:
     drive = (win.drive or "").rstrip(":").lower()
     return "/".join(["/mnt", drive, *win.parts[1:]]) if wsl and drive else path
 
+def bundled_cua_driver_cmd() -> Optional[str]:
+    """The pinned driver a hermes-slim bundle ships beside ``app/`` (``slim/build_bundle.py``), or None.
+
+    The bundle installs no PM runtime, so resolving the baked-in driver here keeps computer use free of
+    a first-use download. Same per-target layout as PM's ``CuaDriver.binary_rel``."""
+    from pm.paths import repo_root
+
+    root = repo_root().parent / "tools" / "cua-driver"
+    rel = ("CuaDriver.app/Contents/MacOS/cua-driver" if sys.platform == "darwin"
+           else "cua-driver.exe" if sys.platform == "win32" else "cua-driver")
+    binary = root / rel
+    return str(binary) if binary.is_file() and os.access(binary, os.X_OK) else None
+
+def external_cua_driver_cmd() -> str:
+    """A driver Hermes does not acquire through PM: ``HERMES_CUA_DRIVER_CMD``, else the bundle's own; ``""`` when
+    PM owns acquisition. Callers skip PM ensure/repair for these and validate them instead."""
+    return os.environ.get(_CUA_DRIVER_CMD_ENV, "").strip() or bundled_cua_driver_cmd() or ""
+
 def resolve_cua_driver_cmd(override: Optional[str] = None) -> Optional[str]:
-    """Read PM's selected binary without installing; never replace an explicit override."""
+    """Read the selected binary without installing: explicit override, then a bundled driver, then PM's pin."""
     configured = (override if override is not None else os.environ.get(_CUA_DRIVER_CMD_ENV, "")).strip()
     if configured:
         expanded = os.path.expanduser(configured)
         resolved = shutil.which(expanded)
         return expanded if resolved and _has_path_separator(expanded) else resolved
+    if bundled := bundled_cua_driver_cmd():
+        return bundled
     from pm import installed_package
 
     installed = installed_package("cua-driver")
     return str(installed.binary) if installed and installed.binary else None
 
 def cua_driver_binary_available() -> bool:
-    """True if PM or an explicit override selects a local driver."""
+    """True if PM, a bundled driver or an explicit override selects a local driver."""
     return resolve_cua_driver_cmd() is not None
+
+def cua_driver_provisionable() -> bool:
+    """May the first ``computer_use`` call acquire the pinned driver itself (``CuaDriverBackend.start`` runs PM
+    ensure)? True when PM builds cua-driver for this target, the user has not declined it
+    (``--skip-computer-use`` / ``hermes pm install --without cua-driver``) and lazy installs are allowed.
+
+    The toolset's check_fn admits the tool on this answer, so an install whose driver is missing, removed or
+    pinned to another version repairs itself on first use instead of the tool silently vanishing."""
+    if sys.platform not in ("darwin", "win32", "linux") or os.environ.get(_CUA_DRIVER_CMD_ENV, "").strip():
+        return False  # an explicit override is the user's binary: never acquired behind their back
+    try:
+        from pm.defaults import declined
+        from pm.install import lazy_installs_allowed
+        from pm.registry import get_package
+        from pm.store import current_target
+
+        return (get_package("cua-driver").missing_reason(current_target()) is None
+                and "cua-driver" not in declined() and lazy_installs_allowed())
+    except Exception:
+        logger.debug("cua-driver provisioning check failed", exc_info=True)
+        return False
 
 def cua_driver_install_hint() -> str:
     return ("cua-driver is not installed. Install the pinned driver with:\n  hermes computer-use install\n"

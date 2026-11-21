@@ -388,7 +388,14 @@ def _wayland_environment_context(report: Report) -> Optional[Report]:
     """Linux+Wayland only: doctor probes the CLI process's environment, not the gateway's."""
     if report.get("platform") != "linux" or not os.environ.get("WAYLAND_DISPLAY"):
         return None
-    return {"scope": "cli_process", "gateway_environment_checked": False}
+    from tools.computer_use import linux_display
+    from tools.computer_use.cua_backend import cua_driver_child_env
+    env = cua_driver_child_env()
+    session = linux_display.detect(env)
+    return {"scope": "cli_process", "gateway_environment_checked": False,
+            "display_session": {"kind": session.kind, "desktop": session.desktop, "xwayland": session.xwayland,
+                                "native_wayland": env.get("CUA_DRIVER_RS_ENABLE_WAYLAND") == "1"},
+            "guidance": linux_display.guidance(session)}
 
 def _print_text_report(report: Report, color: bool, *, identity: Optional[Report] = None,
                        environment: Optional[Report] = None) -> None:
@@ -411,6 +418,9 @@ def _print_text_report(report: Report, color: bool, *, identity: Optional[Report
     if environment:
         lines += [f"  {dim}environment: current CLI process{reset}",
                   f"  {dim}gateway environment was not checked; active gateway computer_use sessions use that process environment{reset}"]
+        if environment.get("guidance"):
+            lines.append(f"  {yellow if not environment['display_session']['native_wayland'] else dim}"
+                         f"display: {environment['guidance']}{reset}")
     if identity.get("version_mismatch"):
         lines += [f"  {yellow}⚠️ version mismatch: health_report says {report_v!r} but binary --version is {cli_v!r}{reset}",
                   f"  {dim}→ trust --version / packages/current for debugging; health_report's binary_version check can lag on Windows{reset}"]

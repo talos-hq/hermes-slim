@@ -48,7 +48,10 @@ def _cu_status(args) -> int:
     # Name the override here too. Without it the operator is told to repair an
     # install that `hermes computer-use install` will (correctly) refuse to touch,
     # with nothing pointing at the env var that actually selected the binary.
-    origin = " [custom binary from HERMES_CUA_DRIVER_CMD]" if override else ""
+    from tools.computer_use.cua_backend_driver import bundled_cua_driver_cmd
+    bundled = not override and path == bundled_cua_driver_cmd()
+    origin = (" [custom binary from HERMES_CUA_DRIVER_CMD]" if override
+              else " [bundled with this install]" if bundled else "")
     print(f"cua-driver: installed at {path}{origin}" + (f" ({version})" if version else ""))
     if not contract.get("ready"):
         print("  ⚠ Repair required: " + (contract.get("reason") or "runtime contract is incomplete"))
@@ -69,7 +72,15 @@ def _cu_status(args) -> int:
                 print(f"    Check: systemctl --user status {unit}  (reinstalling the driver does not start it)")
                 rc = 1
     print("  ✓ Runtime contract ready (externally managed)." if override
+          else "  ✓ Runtime contract ready (bundled pin)." if bundled
           else "  ✓ Runtime contract ready (Hermes PM pin).")
+    from tools.computer_use.cua_backend import cua_auto_approve
+    print("  Approvals: none (computer_use.auto_approve: true — full permissions)" if cua_auto_approve()
+          else "  Approvals: ask before each desktop action (computer_use.auto_approve: false)")
+    if sys.platform == "linux":
+        from tools.computer_use import linux_display
+        from tools.computer_use.cua_backend import cua_driver_child_env
+        print("  Display: " + linux_display.guidance(linux_display.detect(cua_driver_child_env())))
     return rc
 
 

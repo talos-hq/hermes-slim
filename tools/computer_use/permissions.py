@@ -8,10 +8,12 @@ detail into one payload for the desktop card, the ``permissions`` CLI and ``/api
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
 from contextlib import suppress
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
@@ -82,6 +84,18 @@ def _mac_permissions(binary: str, out: dict[str, Any]) -> None:
             if isinstance(data.get("source"), dict):
                 out["source"] = data["source"]
 
+def _auto_approve() -> bool:
+    from tools.computer_use.cua_backend import cua_auto_approve
+    return cua_auto_approve()
+
+def _display_note(plat: str) -> Optional[str]:
+    """Linux only: what this display session lets cua-driver see (X11 / wlroots / GNOME-KDE XWayland-only)."""
+    if plat != "linux":
+        return None
+    from tools.computer_use import linux_display
+    from tools.computer_use.cua_backend import cua_driver_child_env
+    return linux_display.guidance(linux_display.detect(cua_driver_child_env()))
+
 def computer_use_status(driver_cmd: Optional[str] = None) -> dict[str, Any]:
     """OS-aware readiness for the desktop card; key order is an API payload contract. ``ready`` is the single signal the
     UI keys off: macOS = both TCC grants, elsewhere = driver health (no TCC model); ``None`` = unknown (binary missing /
@@ -92,7 +106,8 @@ def computer_use_status(driver_cmd: Optional[str] = None) -> dict[str, Any]:
     binary = resolve_cua_driver_cmd(driver_cmd) if name == DEFAULT_BACKEND else None
     out: dict[str, Any] = {"platform": plat, "platform_supported": plat in _RUNTIME_PLATFORMS,
                            "installed": bool(binary), "version": None, "ready": None, "can_grant": plat == "darwin",
-                           "checks": [], "source": None, "error": None, **{k: None for k in _BOOLS}}
+                           "checks": [], "source": None, "error": None, **{k: None for k in _BOOLS},
+                           "auto_approve": _auto_approve(), "display_note": _display_note(plat)}
     if name != DEFAULT_BACKEND:  # another driver is selected: cua-driver probes and TCC grants do not apply
         out.update(platform_supported=True, can_grant=False)
         try:
@@ -117,6 +132,38 @@ def computer_use_status(driver_cmd: Optional[str] = None) -> dict[str, Any]:
     elif doctor is not None:
         out["ready"] = doctor["ok"]  # no TCC model off macOS
     return out
+
+def tcc_grant_marker() -> Path:
+    """Machine-wide marker: TCC grants belong to CuaDriver's identity, not a Hermes profile, so one request
+    covers every profile."""
+    from hermes_constants import get_default_hermes_root
+    return get_default_hermes_root() / "computer_use" / "tcc-grant-requested"
+
+def request_tcc_grant_once(driver_cmd: Optional[str], *, platform: str = sys.platform) -> str:
+    """Ask macOS for Accessibility + Screen Recording at most once per machine, without blocking the caller.
+
+    The OS cannot grant these silently, so the first setup or first ``computer_use`` call launches
+    ``cua-driver permissions grant`` detached (macOS shows its dialog, attributed to CuaDriver) and writes the
+    marker first; nothing later re-prompts. ``hermes computer-use permissions grant`` stays the manual retry.
+    Returns ``not_macos`` | ``already_requested`` | ``missing_driver`` | ``requested`` | ``failed``."""
+    if platform != "darwin":
+        return "not_macos"
+    marker = tcc_grant_marker()
+    if marker.exists():
+        return "already_requested"
+    if not driver_cmd:
+        return "missing_driver"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("cua-driver permissions grant requested\n", encoding="utf-8")
+    try:
+        subprocess.Popen([driver_cmd, "permissions", "grant"], env=_child_env(), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         # detached-spawn: ok — the grant flow waits for the user at the macOS dialog; outlives us
+                         start_new_session=True)
+    except OSError as exc:
+        logging.getLogger(__name__).warning("cua-driver permissions grant could not start: %s", exc)
+        return "failed"
+    return "requested"
 
 def request_permissions_grant(driver_cmd: Optional[str] = None) -> int:
     """Run ``cua-driver permissions grant`` (macOS), streaming its output. Returns the driver's exit code (0 ok), 2 if

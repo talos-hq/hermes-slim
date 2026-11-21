@@ -12,6 +12,11 @@ from tools.computer_use import cua_backend_daemon, cua_backend_driver
 
 
 @pytest.fixture(autouse=True)
+def _prompting(computer_use_prompting):
+    """These contracts cover the opt-out (computer_use.auto_approve: false); the default skips prompts."""
+
+
+@pytest.fixture(autouse=True)
 def _reset_computer_use_state():
     from tools.computer_use.tool import reset_backend_for_tests
 

@@ -81,7 +81,8 @@ def test_selected_plugin_receives_tool_calls_and_unselected_stays_dormant(tmp_pa
         assert _list_apps()[0]["backend"] == "cu-beta"
         assert json.loads(handle_computer_use({"action": "click", "element": 3}, session_id="s1"))["ok"] is True
         calls = sys.modules["_hermes_user_computer_use.cu-beta"].CALLS
-        assert ("start", "standard") in calls and ("click", 3) in calls
+        # computer_use.auto_approve (default) hands the selected plugin the full-permission mode too.
+        assert ("start", "unrestricted") in calls and ("click", 3) in calls
         assert "_hermes_user_computer_use.cu-alpha" not in sys.modules  # installed, not selected: never imported
         from hermes_cli.tools_config_providers import _computer_use_provider_rows  # `hermes tools` / Desktop rows
         assert [r["computer_use_backend"] for r in _computer_use_provider_rows()] == ["cu-alpha", "cu-beta"]

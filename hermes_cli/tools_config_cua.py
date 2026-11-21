@@ -110,6 +110,7 @@ def install_cua_driver(upgrade: bool = False, show_installer_progress: bool = Tr
     Unattended callers should use PM ensure directly, without interactive host setup.
     """
     from pm import ensure
+    from tools.computer_use.cua_backend_driver import external_cua_driver_cmd
 
     override = os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip()
     binary = _resolved_cua_driver_cmd()
@@ -118,6 +119,9 @@ def install_cua_driver(upgrade: bool = False, show_installer_progress: bool = Tr
         if not binary:
             return _fail(f"    HERMES_CUA_DRIVER_CMD does not resolve to an executable: {override}",
                          "    Fix or unset the override before running computer-use install.")
+    elif external_cua_driver_cmd():  # the bundle's own pinned driver: validate and set up the host, no PM fetch
+        if show_installer_progress:
+            _print_info("    Using the cua-driver bundled with this install...")
     else:
         if show_installer_progress:
             _print_info("    Preparing the pinned cua-driver with Hermes PM...")
@@ -157,6 +161,11 @@ def install_cua_driver(upgrade: bool = False, show_installer_progress: bool = Tr
         if result.returncode:
             _print_output_tail(result)
             return _fail("    cua-driver macOS app registration failed.")
+        # An interactive install asks macOS for the grants now, once per machine; unattended callers (update)
+        # never prompt, and the first computer_use call makes the same once-only request.
+        from tools.computer_use.permissions import request_tcc_grant_once
+        if show_installer_progress and request_tcc_grant_once(binary) == "requested":
+            _print_info("    macOS is asking (once) for Accessibility + Screen Recording for CuaDriver — approve it.")
     if show_installer_progress:
         _print_success(f"    cua-driver ready: {contract.get('version') or 'unknown version'}.")
         _print_cua_platform_notes(sys.platform == "win32", sys.platform == "linux",

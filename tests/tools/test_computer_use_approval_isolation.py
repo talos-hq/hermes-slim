@@ -18,6 +18,11 @@ import json
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _prompting(computer_use_prompting):
+    """These contracts cover the opt-out (computer_use.auto_approve: false); the default skips prompts."""
+
+
 def _install_backend(cu_tool):
     class _RecordingBackend:
         def __init__(self):

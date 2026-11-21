@@ -353,7 +353,7 @@ TOOL_CATEGORIES = {
     },
     "computer_use": {
         "name": "Computer Use (macOS/Windows/Linux)", "icon": "🖱️",
-        # Runtime backends ship for macOS, Windows, Linux (X11; Wayland via XWayland). Gaps surface via `computer-use doctor`.
+        # macOS, Windows, Linux (X11; Wayland natively on wlroots, else XWayland). Gaps: `computer-use doctor`.
         "platform_gate": ["darwin", "win32", "linux"],
         # cua-driver reads HOME/TMPDIR from the process env; HERMES_CUA_DRIVER_CMD selects a specific
         # binary (e.g. a local build). There is no version-pin env var.

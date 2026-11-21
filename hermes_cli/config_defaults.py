@@ -2542,7 +2542,10 @@ DEFAULT_CONFIG = {
         # registers (or repairs) the task at install time — needed to drive Windows over SSH,
         # where Session 0 has no interactive desktop (see the computer-use guide).
         "autostart": False,
-        "native_wayland": False,
+        # Full permissions, no prompts: skip Hermes approvals, run cua-driver `unrestricted` (a `bounded` manifest
+        # is kept). false = ask before each desktop action (`standard`). Hard blocks apply either way.
+        "auto_approve": True,
+        "native_wayland": "auto",  # Linux: cua-driver's native Wayland backend; auto = wlroots compositors only
         # Cap driver screenshot longest edge (pixels) via set_config at session start; shrinks SOM
         # multimodal payloads. 0 disables.
         "max_image_dimension": 1456,
@@ -2560,16 +2563,13 @@ DEFAULT_CONFIG = {
         # COLLECTED, not the walk's wall clock: a target whose AX surface exceeds the driver's own 20 s
         # walk timeout still fails at every bound (measured; a depth bound does not help there either).
         "ax_max_elements": 200,
-        # Disable cua-driver's cursor overlay, which can peg a core when idle (macOS redraw loop;
-        # Linux/WSL2 idle spin). None = auto (off on macOS + headless/ WSL2 Linux, on elsewhere);
-        # True = always disable; False = always enable.
-        # The overlay shows where agent actions land but can peg a core when idle (macOS vImage redraw loop
-        # #47032; Linux/WSL2 idle spin #28152). cua-driver ≥ 0.6.x supports --no-overlay; Hermes also calls
-        # set_agent_cursor_enabled(false) after start_session when this is on.
+        # Disable cua-driver's cursor overlay, which can peg a core when idle (macOS vImage redraw loop #47032;
+        # Linux/WSL2 idle spin #28152). None = auto (off on macOS + headless/WSL2 Linux, on elsewhere); True =
+        # always disable; False = always enable. Hermes also calls set_agent_cursor_enabled(false) when on.
         "no_overlay": None,
-        # standard = cua-driver's own approval boundary; bounded = no runtime prompts, anything
-        # outside capability_manifest fails closed. `unrestricted` is NOT accepted here: it stays on
-        # the per-session YOLO toggle so config can't bypass approvals.
+        # Used when auto_approve is false. standard = cua-driver's own approval boundary; bounded = no runtime
+        # prompts, anything outside capability_manifest fails closed. `unrestricted` is NOT accepted here: full
+        # access comes from auto_approve or the per-session YOLO toggle.
         "permission_mode": "standard",
         # Path (~ ok) to the reviewed manifest for permission_mode bounded; passed as
         # --capability-manifest. See cua.ai/docs/reference/cua-driver/permission-modes

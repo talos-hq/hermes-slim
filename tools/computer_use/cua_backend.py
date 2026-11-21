@@ -24,7 +24,7 @@ from tools.computer_use.cua_backend_capture import _CaptureMixin
 from tools.computer_use.cua_backend_daemon import _EmbeddedCuaDaemon
 from tools.computer_use.cua_backend_driver import (
     _CUA_DRIVER_CMD_ENV, cua_driver_binary_available, cua_driver_runtime_contract_status,
-    resolve_cua_driver_cmd)
+    external_cua_driver_cmd, resolve_cua_driver_cmd)
 from tools.computer_use.cua_backend_input import _InputMixin
 from tools.computer_use.cua_backend_parse import _action_result_from
 from tools.computer_use.cua_backend_session import _AsyncBridge, _CuaDriverSession
@@ -71,10 +71,24 @@ def _cua_telemetry_disabled() -> bool:
 
 def _cua_configured_permission_mode() -> str:
     """``computer_use.permission_mode``: ``standard`` (default) or ``bounded``; unknown values fall closed to
-    ``standard``. ``unrestricted`` is deliberately NOT a config value — it stays tied to the per-session YOLO
-    toggle so a stale config line can never silently bypass approvals."""
+    ``standard``. ``unrestricted`` is deliberately NOT a config value: full access comes from
+    ``computer_use.auto_approve`` (one named switch) or the per-session YOLO toggle, never a stale mode line."""
     raw = str(_computer_use_cfg().get("permission_mode", "standard") or "").strip().lower()
     return "bounded" if raw == "bounded" else "standard"
+
+def cua_auto_approve() -> bool:
+    """``computer_use.auto_approve`` (default True): computer_use runs with full permissions and never prompts —
+    Hermes approvals are skipped and a ``standard`` driver mode becomes cua-driver's ``unrestricted`` daemon.
+    Only an explicit ``false`` restores the prompts (and the configured ``permission_mode``). Hard blocks
+    (logout, lock screen, dangerous typed shell patterns) apply either way. An unreadable config fails closed
+    to prompting: a user's opt-out must not be lost to a parse error."""
+    try:
+        from hermes_cli.config import load_config
+        cfg = (load_config() or {}).get("computer_use") or {}
+    except Exception:
+        logger.warning("computer_use: config unreadable; approval prompts stay on", exc_info=True)
+        return False
+    return cfg.get("auto_approve", True) is not False
 
 # ``computer_use.ax_max_elements``: bound on the DRIVER's accessibility-tree walk per capture. The
 # visible-element cap in tool.py (_DEFAULT_MAX_ELEMENTS) trims the RESPONSE only, so without this an
@@ -146,9 +160,21 @@ def cua_driver_child_env(base_env: Optional[dict[str, str]] = None) -> dict[str,
     env = _bot_desktop_env(env)
     if _cua_telemetry_disabled():
         env[_CUA_TELEMETRY_ENV_VAR] = "0"
-    if sys.platform == "linux" and env.get("WAYLAND_DISPLAY") and bool(_computer_use_cfg().get("native_wayland", False)):
-        env[_CUA_NATIVE_WAYLAND_ENV_VAR] = "1"
+    if sys.platform == "linux":
+        _apply_linux_display_policy(env)
     return env
+
+def _apply_linux_display_policy(env: dict[str, str]) -> None:
+    """Native Wayland per ``computer_use.native_wayland`` (``auto``: wlroots compositors only, see
+    ``linux_display``), and a stale ``XAUTHORITY`` swapped for the session's one live cookie — a Hermes started
+    before the desktop session restarted otherwise has every X11 connection refused and sees no windows."""
+    from tools.computer_use import linux_display
+    session = linux_display.detect(env)
+    if env.get("WAYLAND_DISPLAY") and linux_display.resolve_native_wayland(
+            _computer_use_cfg().get("native_wayland", "auto"), session):
+        env[_CUA_NATIVE_WAYLAND_ENV_VAR] = "1"
+    if live := linux_display.live_xauthority(env):
+        env["XAUTHORITY"] = live
 
 def sandbox_mcp_invocation() -> Optional[tuple[tuple[str, list[str]], dict[str, str]]]:
     """``((command, args), child_env)`` spawning ``cua-driver mcp`` INSIDE the terminal backend when the Bot
@@ -238,8 +264,13 @@ def _empty_discovery_reason() -> str:
     if _linux_session_locked() is True:
         return ("the desktop session is LOCKED (loginctl LockedHint=yes) — unlock the screen; "
                 "a locked compositor hides windows and freezes app renderers")
-    if sys.platform == "linux" and not os.environ.get("DISPLAY"):
-        return "no DISPLAY is set — X11/XWayland is not reachable from this process"
+    if sys.platform == "linux":
+        from tools.computer_use import linux_display
+        session = linux_display.detect(cua_driver_child_env())
+        if session.kind != "x11":  # headless, or Wayland where only some windows are visible to the driver
+            return "window discovery returned no windows. " + linux_display.guidance(session)
+        if session.stale_xauthority:
+            return "window discovery returned no windows. " + linux_display.guidance(session)
     if sys.platform == "darwin":  # headless Mac / asleep panel: ScreenCaptureKit has 0 shareable displays while TCC looks fine
         return ("window discovery returned no windows; on macOS this usually means no shareable display (headless Mac or "
                 "panel asleep) — wake the display or attach a monitor/HDMI dummy, then run `hermes computer-use doctor`")
@@ -285,10 +316,14 @@ class CuaDriverBackend(_CaptureMixin, _InputMixin, ComputerUseBackend):
         if sandbox_mcp_invocation() is not None:
             contract = {"ready": True}
         else:
-            if not os.environ.get(_CUA_DRIVER_CMD_ENV, "").strip():
+            if not external_cua_driver_cmd():  # PM owns this driver: install a missing or off-pin one now
                 from pm import ensure
                 ensure("cua-driver")
             contract = cua_driver_runtime_contract_status()
+            if contract.get("ready") and sys.platform == "darwin":
+                # macOS asks for Accessibility + Screen Recording exactly once per machine (marker-gated).
+                from tools.computer_use.permissions import request_tcc_grant_once
+                request_tcc_grant_once(contract.get("binary"))
         if not contract.get("ready"):
             raise RuntimeError(f"cua-driver is not ready: {contract.get('reason') or 'runtime contract is incomplete'}. "
                                + ("Update the binary selected by HERMES_CUA_DRIVER_CMD or remove that override."
