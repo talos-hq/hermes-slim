@@ -138,6 +138,44 @@ def unpack(archive: Path, dest: Path) -> None:
             t.extractall(dest, filter="tar") if hasattr(tarfile, "data_filter") else t.extractall(dest)
 
 
+CUA_DRIVER_PRUNE = ("*cua_driver_sdk*", "cua_driver_abi.h", "*.node")
+
+
+def stage_cua_driver(bundle: Path, target: str, downloads: Path) -> Path | None:
+    """Bake the pm/lock.json cua-driver pin (sha256-verified) into tools/cua-driver/, where
+    tools/computer_use/cua_backend_driver.py:bundled_cua_driver_cmd finds it, so computer use works
+    with no first-use download (a bundle carries no PM runtime). Same staging as PM's CuaDriver
+    package: one top-level directory flattened, the C SDK dropped. None for targets cua-driver
+    publishes no build for (musl); there the agent's skill names the gap."""
+    artifacts = json.loads((REPO / "pm" / "lock.json").read_text())["packages"]["cua-driver"]["artifacts"]
+    artifact = artifacts.get(target)
+    if artifact is None:
+        print(f"cua-driver: no {target} build in pm/lock.json; computer use stays unavailable", flush=True)
+        return None
+    dest = bundle / "tools" / "cua-driver"
+    scratch = downloads / f"cua-driver-{target}"
+    shutil.rmtree(scratch, ignore_errors=True)
+    unpack(fetch(artifact["url"], artifact["sha256"], downloads), scratch)
+    entries = list(scratch.iterdir())
+    root = entries[0] if len(entries) == 1 and entries[0].is_dir() and not entries[0].name.endswith(".app") else scratch
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(root), dest)
+    shutil.rmtree(dest / "sdk", ignore_errors=True)
+    # The embedding SDK (C library + header, Node addon) is for other hosts; the CLI links it statically.
+    # ~40 MiB. Top level only: nothing inside the signed CuaDriver.app is touched.
+    for pattern in CUA_DRIVER_PRUNE:
+        for p in dest.glob(pattern):
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+    shutil.rmtree(scratch, ignore_errors=True)
+    binary = dest / ("CuaDriver.app/Contents/MacOS/cua-driver" if target.startswith("darwin")
+                     else "cua-driver.exe" if target.startswith("win32") else "cua-driver")
+    if not binary.is_file():
+        raise SystemExit(f"cua-driver archive for {target} has no {binary.relative_to(dest)}")
+    if not target.startswith("win32"):
+        binary.chmod(0o755)
+    return binary
+
+
 def find_exe(root: Path, names: tuple[str, ...]) -> Path:
     for name in names:
         for p in sorted(root.rglob(name)):
@@ -369,6 +407,8 @@ def stage(target: str, wheels: Path | None, work: Path, host_work: Path) -> Path
         sp = bundle / cross.site_packages(target, version)
         shutil.rmtree(sp / "bin", ignore_errors=True)
         (sp / ".lock").unlink(missing_ok=True)
+
+    stage_cua_driver(bundle, target, downloads)
 
     app = bundle / "app"
     # What a commit would hold (tracked, plus new files not gitignored): a working tree

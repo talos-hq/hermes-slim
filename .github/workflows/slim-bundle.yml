@@ -162,6 +162,13 @@ jobs:
       - name: Standalone zstd for clients without one
         if: matrix.target == 'linux-x64-musl' || startsWith(matrix.target, 'darwin-')
         run: sh slim/build_zstd.sh dist
+      # A private X display for the smoke test's computer-use step (list_windows + a screenshot through
+      # Hermes' computer_use tool layer against the bundled cua-driver). The libs are cua-driver's own.
+      - name: Computer-use test display
+        if: startsWith(matrix.target, 'linux-') && !matrix.container
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb xterm libx11-6 libxi6 libxtst6 libxkbcommon0
       - name: Smoke test
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
