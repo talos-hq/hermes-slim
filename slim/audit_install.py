@@ -191,8 +191,8 @@ def check_downloads(report: Report, timing: Path, asset: str) -> None:
 
 def check_signatures(report: Report, tree: Path, label: str) -> None:
     if WINDOWS:
-        ps = ("$ErrorActionPreference='Stop'; Get-ChildItem -LiteralPath $env:AUDIT_TREE -Recurse -File -Include *.exe,*.dll,*.pyd "
-              "| Get-AuthenticodeSignature | ForEach-Object { [pscustomobject]@{ Path = $_.Path; Status = [string]$_.Status; "
+        ps = ("$ErrorActionPreference='Stop'; Get-ChildItem -LiteralPath $env:AUDIT_TREE -Recurse -File "
+              "| Where-Object { $_.Extension -in '.exe','.dll','.pyd' } | Get-AuthenticodeSignature | ForEach-Object { [pscustomobject]@{ Path = $_.Path; Status = [string]$_.Status; "
               "Signer = if ($_.SignerCertificate) { $_.SignerCertificate.Subject } else { '' } } } | ConvertTo-Json -Compress")
         out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], env={**os.environ, "AUDIT_TREE": str(tree)},
                              capture_output=True, text=True, timeout=1200, check=True).stdout.strip() or "[]"
@@ -266,6 +266,8 @@ def main() -> int:
     ap.add_argument("--report", type=Path)
     ap.add_argument("--public-installer", action="store_true")
     args = ap.parse_args()
+    # Windows consoles default to cp1252; the report has ✅/❌.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     native, target = machine_target()
