@@ -8,9 +8,10 @@ Three properties (meta issue #138):
 
 1. signed    every Windows PE (.exe/.dll/.pyd) has a valid Authenticode signature;
              every Mach-O carries a Developer ID signature that `codesign` accepts.
-2. bundled   the release ships one .tar.zst per target with Python, Node, npm, git and
-             ripgrep inside, and installing (plus a first `hermes --version`) never
-             runs a package manager.
+2. bundled   the release ships one .tar.zst per target with Python, Node, npm and ripgrep
+             (and git on Windows; POSIX uses the system git by PM's design) inside,
+             Hermes' PM resolves each of them in the bundle, and installing (plus a
+             first `hermes --version`) never runs a package manager.
 3. parallel  the bundle arrives as concurrent HTTP range requests, and independent
              downloads (bundle, .sha256, zstd helper) overlap instead of queueing.
 
@@ -50,7 +51,18 @@ MACOS = sys.platform == "darwin"
 PACKAGE_MANAGERS = ("pip", "pip3", "uv", "uvx", "npm", "npx", "pnpm", "yarn", "brew", "port",
                     "winget", "choco", "scoop")
 # Runtimes Hermes' pm would otherwise download on first use (pm/lock.json).
-REQUIRED_RUNTIMES = {"node": "Node.js", "npm": "npm", "git": "git", "rg": "ripgrep"}
+# PM package -> label. Resolved through Hermes' own PM (pm.installed_package) with the
+# bundle's interpreter: the file existing is not enough, PM must find it there.
+REQUIRED_RUNTIMES = {"node": "Node.js", "npm": "npm", "ripgrep": "ripgrep"}
+WINDOWS_RUNTIMES = {"git": "git"}
+RESOLVE = """
+import json, sys, pm
+out = {}
+for name in sys.argv[1:]:
+    found = pm.installed_package(name)
+    out[name] = str(found.binary) if found and found.binary else None
+print(json.dumps(out))
+"""
 OPTIONAL_RUNTIMES = {"ffmpeg": "ffmpeg", "chromium": "Chromium"}
 
 
@@ -234,6 +246,18 @@ def find_runtime(tree: Path, name: str) -> Path | None:
     return None
 
 
+def pm_resolution(tree: Path, python: Path, env: dict, names: list[str]) -> dict[str, str | None]:
+    """Where Hermes' PM finds each package, asked with the bundle's own interpreter."""
+    # -P: `-c` would put the working directory (a checkout, in CI) ahead of the bundle's app/.
+    proc = subprocess.run([str(python), "-P", "-c", RESOLVE, *names], capture_output=True, text=True, timeout=300,
+                          check=False, env={**env, "PYTHONPATH": str(tree / "app")})
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        print(proc.stdout, proc.stderr, sep="\n")
+        return {}
+
+
 def check_contents(report: Report, tree: Path, asset: str, shim_log: Path, env: dict, work: Path) -> None:
     report.add("bundled", "release bundle is one .tar.zst", asset.endswith(".tar.zst"), asset)
     python = tree / "python" / ("python.exe" if WINDOWS else "bin/python3")
@@ -242,10 +266,21 @@ def check_contents(report: Report, tree: Path, asset: str, shim_log: Path, env: 
         report.add("bundled", "Python ships in the bundle", ver.returncode == 0, f"{python.relative_to(tree)} {ver.stdout.strip()}")
     else:
         report.add("bundled", "Python ships in the bundle", False, f"no {python.relative_to(tree)}")
-    for exe, label in REQUIRED_RUNTIMES.items():
-        hit = find_runtime(tree, exe)
-        report.add("bundled", f"{label} ships in the bundle", hit is not None,
-                   str(hit.relative_to(tree)) if hit else "not in bundle; Hermes' pm downloads it on first use")
+    required = {**REQUIRED_RUNTIMES, **(WINDOWS_RUNTIMES if WINDOWS else {})}
+    resolved = pm_resolution(tree, python, env, list(required))
+    for name, label in required.items():
+        hit = resolved.get(name)
+        inside = hit is not None and Path(hit).resolve().is_relative_to(tree.resolve())
+        if inside:
+            ver = subprocess.run([hit, "--version"], capture_output=True, text=True, timeout=120, check=False)
+            detail = f"{Path(hit).relative_to(tree)}: {(ver.stdout or ver.stderr).strip().splitlines()[0] if ver.returncode == 0 else f'exit {ver.returncode}'}"
+            ok = ver.returncode == 0
+        else:
+            detail, ok = (f"PM resolves {hit}, outside the bundle" if hit else
+                          "not in the bundle; Hermes' PM downloads it on first use"), False
+        report.add("bundled", f"{label} ships in the bundle", ok, detail)
+    if not WINDOWS:
+        report.add("bundled", "git ships in the bundle", None, "system git on POSIX by PM's design (pm/packages.py Git)")
     for exe, label in OPTIONAL_RUNTIMES.items():
         hit = find_runtime(tree, exe)
         report.add("bundled", f"{label} ships in the bundle (optional)", None,

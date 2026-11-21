@@ -10,7 +10,9 @@ against a throwaway HERMES_HOME, and checks that:
   3. the gateway starts and answers /health,
   4. computer use is baked in: the bundled cua-driver meets the runtime contract, and on Linux
      (Xvfb + xterm on PATH) list_windows + a screenshot work through Hermes' tool layer,
-  5. (optional, OPENROUTER_API_KEY set) the model answers a real prompt.
+  5. Hermes' PM resolves node, npm and ripgrep (and git on Windows) inside the bundle's
+     pm-store and each runs, so a client never downloads them (#142),
+  6. (optional, OPENROUTER_API_KEY set) the model answers a real prompt.
 Stdlib only.
 """
 
@@ -35,6 +37,25 @@ FAKE_KEY = "sk-or-v1-" + "0" * 64
 
 def step(msg: str) -> None:
     print(f"\n=== {msg}", flush=True)
+
+
+PM_TOOLS = """
+import json, os, subprocess, sys, pm
+tools = ["node", "npm", "ripgrep"] + (["git"] if os.name == "nt" else [])
+for name in tools:
+    found = pm.installed_package(name)
+    binary = found.binary if found else None
+    if binary is None or not binary.resolve().is_relative_to(os.path.realpath(sys.argv[1])):
+        sys.exit(f"PM resolves {name} to {binary}, not inside the bundle: a client would download it")
+    out = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=120, check=True, env=pm.env_for(name))
+    print(name, binary.relative_to(os.path.realpath(sys.argv[1])), out.stdout.strip().splitlines()[0])
+"""
+
+
+def pm_tools_smoke(bundle: Path, py: Path, env: dict) -> None:
+    # -P: never import a pm from the working directory instead of the bundle's app/.
+    subprocess.run([py, "-P", "-c", PM_TOOLS, bundle], env=dict(env, PYTHONPATH=str(bundle / "app")),
+                   check=True, timeout=600)
 
 
 def computer_use_smoke(bundle: Path, py: Path, env: dict) -> None:
@@ -114,6 +135,9 @@ def main() -> int:
 
     step("computer use: bundled cua-driver")
     computer_use_smoke(bundle, py, env)
+
+    step("bundled tools resolve through PM")
+    pm_tools_smoke(bundle, py, env)
 
     step("hermes --version")
     subprocess.run([hermes, "--version"], env=env, check=True, timeout=300)

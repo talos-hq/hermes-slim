@@ -36,6 +36,7 @@ hermes-slim-<ver>-<target>.tar.zst   (Windows also ships a transitional .zip, #1
   python/          relocatable CPython 3.14 (python-build-standalone)
   app/             hermes source at the tagged commit
   site-packages    every dependency pre-installed from uv.lock (+ our wheels)
+  pm-store/        node, npm, ripgrep (+ git on Windows), staged by PM itself (#142)
   bin/hermes(.cmd) launcher
   bin/hermes-slim-setup(.cmd)
   SHA256SUMS
@@ -53,6 +54,21 @@ How a bundle is built (`slim/build_bundle.py`; natively, or on Linux for any tar
    on the client.
 4. Copy the Hermes source (minus desktop app, website, tests) to `app/`, add
    launchers that set `PYTHONPATH=app` and `HERMES_SLIM=1`.
+5. Prebuild the tools Hermes' PM would otherwise download on first use
+   (`slim/pm_tools.py`): `pm.prepare_tools` installs `node`, `npm` and `ripgrep`
+   (plus `git`, i.e. PortableGit, on Windows) for the target into `pm-store/`, keeps
+   only those entries, and the install stamp's `bundledStore` names the store.
+   `pm.paths.bundled_store_root` adds it as a read-only root to every PM lookup, so
+   `pm.ensure`/`installed_package` resolve there and the client downloads nothing.
+   Installs PM still makes (chromium, ffmpeg) go to the writable store, as before.
+   - **POSIX git** stays the system's: PM's `Git` package is Windows-only by design.
+   - **Chromium and ffmpeg** stay on demand: 100+ MB each, for features most installs never use.
+   - **Native builds only:** npm's install step runs the target's `node`; a cross build
+     ships no `pm-store` and says so. Every CI leg builds natively.
+   - **Signing:** `pm-store` binaries are signed with the rest (vendor Developer ID
+     signatures such as Node's are kept: they carry the `allow-jit` entitlement V8
+     needs); `pm_tools.py reseal` then re-records PM's digests over the signed bytes.
+   - **Size:** linux-x64 118 → 173 MiB (`node` is a 150 MB binary).
 
 ### Cross builds (#128)
 A linux-x64 host builds every target: `build_bundle.py --target win32-x64` on Linux.
@@ -164,7 +180,5 @@ off for good. So the Windows bundle ships signed binaries only:
   `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`.
 
 ## Known gaps
-- macOS bundles are not Developer ID signed or notarized; install.sh clears the quarantine
-  flag instead. Signing + notarization (Apple Developer ID) is the real fix.
 - `HERMES_SLIM=1` is also written to `~/.hermes/.env`, which Hermes loads before provider plugins, so
   service-started gateways hide Nous too.

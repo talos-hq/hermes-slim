@@ -89,7 +89,10 @@ def _installed_location(package: Package, lockfile: Lockfile, target: str, *,
                         roots: tuple[Path, ...] | None = None, heal: bool = True):
     """Prefer the current pin. An explicit read may retain a prior PM install. ``heal=False``
     keeps the lookup read-only (scripts/tool_store_pins.py asks it about a store it must not touch)."""
-    search_roots = dict.fromkeys(roots if roots is not None else (paths.store_root(), paths.writable_store_root()))
+    if roots is None:
+        bundled = paths.bundled_store_root()
+        roots = (paths.store_root(), *((bundled,) if bundled else ()), paths.writable_store_root())
+    search_roots = dict.fromkeys(roots)
     fallback = None
     for root in search_roots:
         store = Store(root)
