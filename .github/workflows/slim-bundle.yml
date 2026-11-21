@@ -256,7 +256,11 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          archive="$(ls dist/hermes-slim-*-${{ matrix.target }}.tar.zst dist/hermes-slim-*-${{ matrix.target }}.zip 2>/dev/null | head -1)"
+          # Prefer the .tar.zst; a win32-x64 build also writes a transitional .zip.
+          archive=""
+          for f in dist/hermes-slim-*-${{ matrix.target }}.tar.zst dist/hermes-slim-*-${{ matrix.target }}.zip; do
+            if [ -f "$f" ]; then archive="$f"; break; fi
+          done
           helper="$RUNNER_TEMP/hs-work/helper/zstd-win32-x64.exe"
           if [ -f "$helper" ] && [ ! -f dist/zstd-win32-x64.exe ]; then
             # win32-arm64 unpacks with the x64 helper that the win32-x64 leg publishes; for
