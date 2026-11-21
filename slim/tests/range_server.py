@@ -79,7 +79,7 @@ def make_handler(root: Path, drop_after: int | None, delay: float = 0.0):
             if not body:
                 return
             if delay:
-                time.sleep(delay)
+                time.sleep(delay)  # health: allow HX013 -- simulated network latency is the behaviour under test
             key = f"{self.path} {rng}"
             with lock:
                 drop = drop_after is not None and len(chunk) > drop_after and key not in dropped
