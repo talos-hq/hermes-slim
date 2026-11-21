@@ -93,6 +93,46 @@ class DownloadTests(unittest.TestCase):
         concurrent = any(a[0] < b[1] and b[0] < a[1] for i, a in enumerate(spans) for b in spans[i + 1:])
         self.assertTrue(concurrent, spans)
 
+    def timeline(self):
+        rows = []
+        for line in (self.release / "timing.log").read_text().splitlines():
+            start, end, method, path, rng = line.split(" ", 4)
+            if method == "GET":
+                rows.append((float(start), float(end), path.lstrip("/"), rng))
+        return rows
+
+    def test_zstd_helper_downloads_while_the_bundle_does(self):
+        # The helper install.sh picks for this host (its zstd_asset case).
+        helpers = {("Linux", "x86_64"): "zstd-linux-x64", ("Darwin", "arm64"): "zstd-darwin-arm64",
+                   ("Darwin", "x86_64"): "zstd-darwin-x64"}
+        name = helpers.get((os.uname().sysname, os.uname().machine))
+        if not name:
+            self.skipTest("install.sh publishes no zstd helper for this host")
+        stub = '#!/bin/sh\ncat "$2"\n'
+        (self.release / name).write_text(stub)
+        (self.release / f"{name}.sha256").write_text(f"{hashlib.sha256(stub.encode()).hexdigest()}  {name}\n")
+        # The host PATH with every directory that holds a zstd swapped for a copy without it,
+        # so the installer needs its helper and every other command still resolves.
+        path = []
+        for i, d in enumerate(os.environ["PATH"].split(os.pathsep)):
+            if not (Path(d) / "zstd").exists():
+                path.append(d)
+                continue
+            farm = self.root / f"no-zstd-{i}"
+            farm.mkdir()
+            for exe in Path(d).iterdir():
+                if exe.name != "zstd":
+                    (farm / exe.name).symlink_to(exe)
+            path.append(str(farm))
+        self.env["PATH"] = os.pathsep.join(path)
+        result = self.install(self.serve(), "--jobs", "4")
+        self.assert_installed(result)
+        rows = self.timeline()
+        bundle_done = max(end for start, end, path, rng in rows if path == ASSET and rng and rng != "bytes=0-0")
+        helper_start = min(start for start, end, path, rng in rows if path == name)
+        # The helper must not queue behind the bundle: it starts before the last range ends.
+        self.assertLess(helper_start, bundle_done, rows)
+
     def test_dropped_connections_resume_from_the_last_byte(self):
         result = self.install(self.serve(drop_after=2**20), "--jobs", "4")
         self.assert_installed(result)
