@@ -1,7 +1,11 @@
-# hermes-slim installer for Windows x64.
+# hermes-slim installer for Windows (x64 and ARM64).
 #
 #   powershell -ExecutionPolicy Bypass -File install.ps1 [-Version vX.Y.Z | -Archive FILE|URL]
-#       [-Dir $env:LOCALAPPDATA\hermes-slim] [-Jobs N] [-Upgrade] [-NoSetup] [-- <setup args>]
+#       [-Dir $env:LOCALAPPDATA\hermes-slim] [-Jobs N] [-Arch x64|arm64]
+#       [-Upgrade] [-NoSetup] [-- <setup args>]
+#
+# ARM64 Windows gets the native win32-arm64 bundle (#143); a release without one falls back
+# to win32-x64, which Windows runs under emulation.
 #
 # Downloads one prebuilt bundle from github.com/talos-hq/hermes-slim releases,
 # verifies its sha256, unpacks it, and runs hermes-slim-setup. Nothing is
@@ -20,6 +24,7 @@ param(
     [string]$Dir = (Join-Path $env:LOCALAPPDATA "hermes-slim"),
     [string]$Archive = "",
     [ValidateRange(1, 32)][int]$Jobs = 8,
+    [ValidateSet("", "x64", "arm64")][string]$Arch = "",
     [switch]$Upgrade,
     [switch]$NoSetup,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$SetupArgs
@@ -27,7 +32,9 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $repo = "talos-hq/hermes-slim"
-$target = "win32-x64"
+# PROCESSOR_ARCHITEW6432 is the machine's architecture when this PowerShell itself is emulated.
+$machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$target = if ($Arch) { "win32-$Arch" } elseif ($machine -eq "ARM64") { "win32-arm64" } else { "win32-x64" }
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 # .NET Framework allows 2 connections per host by default, which would serialize the ranges.
 [Net.ServicePointManager]::DefaultConnectionLimit = [Math]::Max([Net.ServicePointManager]::DefaultConnectionLimit, $Jobs + 2)
@@ -153,7 +160,9 @@ function Test-NeedBundle { -not (Test-Installed $current) -and -not (Test-Instal
 # A .tar.zst bundle unpacks with a standalone zstd.exe piped into Windows' own tar.exe
 # (bsdtar, in System32 since Windows 10 1803). The helper downloads in the background
 # while the bundle's ranges do (#141, #144) and is checked against its sha256 before use.
-$zstdAsset = "zstd-$target.exe"
+# One helper for both targets: facebook/zstd publishes no ARM64 Windows build, and the x64
+# one runs under emulation for the few seconds an unpack takes.
+$zstdAsset = "zstd-win32-x64.exe"
 $script:helperJob = $null
 function Start-Helper([string]$Base, [string]$Sha256) {
     if (Get-Command zstd.exe -ErrorAction SilentlyContinue) { return }
@@ -222,12 +231,17 @@ if ($Archive -match '^https?://') {
         $lines = $manifest -split "`r?`n"
         $tagLine = $lines | Where-Object { $_ -match '^release (\S+)$' } | Select-Object -First 1
         if ($tagLine -match '^release (\S+)$') { $Version = $Matches[1] }
-        $entry = @($lines | Where-Object { $_ -match "^bundle $target hermes-slim-\S+\.tar\.zst [0-9a-f]{64} " }) +
-                 @($lines | Where-Object { $_ -match "^bundle $target hermes-slim-\S+\.zip [0-9a-f]{64} " }) | Select-Object -First 1
+        $pick = { param($t) @($lines | Where-Object { $_ -match "^bundle $t hermes-slim-\S+\.tar\.zst [0-9a-f]{64} " }) +
+                            @($lines | Where-Object { $_ -match "^bundle $t hermes-slim-\S+\.zip [0-9a-f]{64} " }) | Select-Object -First 1 }
+        $entry = & $pick $target
+        if (-not $entry -and $target -eq "win32-arm64" -and -not $Arch) {
+            Write-Host "-> release $Version has no win32-arm64 bundle; installing win32-x64 (runs under emulation)"
+            $target = "win32-x64"; $entry = & $pick $target
+        }
         if (-not $entry) { throw "no $target bundle in release $Version" }
         $null = $entry -match "^bundle $target (\S+) (\S+) "
         $name = $Matches[1]; $expected = $Matches[2]
-        $helperLine = $lines | Where-Object { $_ -match "^zstd $target $([regex]::Escape($zstdAsset)) ([0-9a-f]{64}) " } | Select-Object -First 1
+        $helperLine = $lines | Where-Object { $_ -match "^zstd win32-x64 $([regex]::Escape($zstdAsset)) ([0-9a-f]{64}) " } | Select-Object -First 1
         $helperSha = if ($helperLine -match " ([0-9a-f]{64}) ") { $Matches[1] } else { "" }
     } else {
         # Releases from before the manifest: look the asset up through the API.
@@ -239,8 +253,13 @@ if ($Archive -match '^https?://') {
             throw
         }
         $Version = $release.tag_name
-        $asset = @($release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.tar.zst" }) +
-                 @($release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.zip" }) | Select-Object -First 1
+        $pick = { param($t) @($release.assets | Where-Object { $_.name -like "hermes-slim-*-$t.tar.zst" }) +
+                            @($release.assets | Where-Object { $_.name -like "hermes-slim-*-$t.zip" }) | Select-Object -First 1 }
+        $asset = & $pick $target
+        if (-not $asset -and $target -eq "win32-arm64" -and -not $Arch) {
+            Write-Host "-> release $Version has no win32-arm64 bundle; installing win32-x64 (runs under emulation)"
+            $target = "win32-x64"; $asset = & $pick $target
+        }
         $helperSha = ""
         if (-not $asset) { throw "no $target bundle in release $Version" }
         $name = $asset.name

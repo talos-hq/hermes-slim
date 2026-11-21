@@ -35,7 +35,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cross
-TARGETS = ("darwin-x64", "darwin-arm64", "win32-x64", "linux-x64-musl", "linux-x64", "linux-arm64")
+TARGETS = ("darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64", "linux-x64-musl", "linux-x64", "linux-arm64")
 # Oldest glibc a glibc bundle runs on: 2.28 is Debian 10, Ubuntu 20.04, RHEL 8 (the
 # manylinux_2_28 platforms in cross.UV_PLATFORM). python-build-standalone itself needs only
 # 2.17. install.sh checks the same floor.
@@ -97,6 +97,8 @@ STRIPPED_PYTHON_SHA256 = {
 NUGET_PYTHON = {
     "win32-x64": {"url": "https://api.nuget.org/v3-flatcontainer/python/3.14.9/python.3.14.9.nupkg",
                   "sha256": "7cd9d07aec975212344dc6f7e45019378cf6775dd564181e269010a1eddaaec7"},
+    "win32-arm64": {"url": "https://api.nuget.org/v3-flatcontainer/pythonarm64/3.14.9/pythonarm64.3.14.9.nupkg",
+                    "sha256": "979ba7a2f09d18e7bc17e47b15264e49189fe73227cd772b3f856c29663f019a"},
 }
 
 
@@ -479,9 +481,9 @@ def package(target: str, out: Path, work: Path, host_work: Path) -> Path:
     (bundle / "BUNDLE.json").write_text(json.dumps(
         {"target": target, "commit": rev, "version": version, "extras": EXTRAS}, indent=2))
     name = f"hermes-slim-{rev}-{target}"
-    if windows:
-        # Transition (#141): installers older than the .tar.zst switch look only for a zip.
-        # Drop this once a release has shipped both.
+    if target == "win32-x64":
+        # Transition (#141): installers older than the .tar.zst switch look only for an x64
+        # zip. Drop this once a release has shipped both.
         legacy = out / f"{name}.zip"
         with zipfile.ZipFile(legacy, "w", zipfile.ZIP_DEFLATED) as z:
             for p in bundle.rglob("*"):

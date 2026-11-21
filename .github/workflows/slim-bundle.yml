@@ -67,7 +67,7 @@ jobs:
       PYTHONUTF8: "1"
       # Windows signing runs on every non-PR build (main pushes and v* tags, which the Azure
       # federated credential trusts) and fails closed. Pull requests get no OIDC trust and skip it.
-      SIGN_WINDOWS: ${{ matrix.target == 'win32-x64' && github.event_name != 'pull_request' }}
+      SIGN_WINDOWS: ${{ startsWith(matrix.target, 'win32-') && github.event_name != 'pull_request' }}
     steps:
       - name: Alpine prerequisites
         if: matrix.container
@@ -165,7 +165,7 @@ jobs:
       # install.ps1 unpacks the .tar.zst bundle with this helper and tar.exe (#141). It runs
       # before anything else in the release, so it is signed with the bundle's binaries.
       - name: Standalone zstd for Windows clients
-        if: matrix.target == 'win32-x64'
+        if: startsWith(matrix.target, 'win32-')
         run: |
           ${{ steps.py.outputs.bin }} slim/zstd_windows.py "$RUNNER_TEMP/hs-work/helper"
           printf 'helper\\zstd-win32-x64.exe\n' >> "$RUNNER_TEMP/hs-work/unsigned.txt"
@@ -219,7 +219,7 @@ jobs:
           file-digest: SHA256
           timestamp-digest: SHA256
       - name: Verify every Windows binary is validly signed
-        if: matrix.target == 'win32-x64'
+        if: startsWith(matrix.target, 'win32-')
         shell: pwsh
         run: |
           $bad = Get-ChildItem -Recurse -File "$env:RUNNER_TEMP/hs-work/hermes-slim", "$env:RUNNER_TEMP/hs-work/helper" -Include *.exe,*.dll,*.pyd |
@@ -255,7 +255,19 @@ jobs:
       - name: Smoke test
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: ${{ steps.py.outputs.bin }} slim/smoke_test.py "$(ls dist/hermes-slim-*-${{ matrix.target }}.zip dist/hermes-slim-*-${{ matrix.target }}.tar.zst 2>/dev/null | head -1)"
+        run: |
+          archive="$(ls dist/hermes-slim-*-${{ matrix.target }}.tar.zst dist/hermes-slim-*-${{ matrix.target }}.zip 2>/dev/null | head -1)"
+          helper="$RUNNER_TEMP/hs-work/helper/zstd-win32-x64.exe"
+          if [ -f "$helper" ] && [ ! -f dist/zstd-win32-x64.exe ]; then
+            # win32-arm64 unpacks with the x64 helper that the win32-x64 leg publishes; for
+            # this smoke run, stand this leg's signed copy beside the archive, outside dist/.
+            smoke="$RUNNER_TEMP/smoke"
+            mkdir -p "$smoke"
+            cp "$archive" "$archive.sha256" "$helper" "$smoke/"
+            (cd "$smoke" && sha256sum zstd-win32-x64.exe > zstd-win32-x64.exe.sha256)
+            archive="$smoke/$(basename "$archive")"
+          fi
+          ${{ steps.py.outputs.bin }} slim/smoke_test.py "$archive"
       - uses: actions/upload-artifact@v4
         with:
           name: hermes-slim-${{ matrix.target }}

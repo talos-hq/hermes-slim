@@ -27,6 +27,7 @@ Smoke steps (layer 4):
 | Target | Runner | Notes |
 |---|---|---|
 | win32-x64 | `windows-latest` | `.tar.zst` via `zstd-win32-x64.exe` + `tar.exe` (plus a transitional `.zip`), `.cmd` launchers |
+| win32-arm64 | `windows-11-arm` | native ARM64 CPython; unpacks with the x64 `zstd-win32-x64.exe` (no ARM64 build upstream; runs emulated) |
 | darwin-x64 | `macos-15-intel` | the case that broke upstream; uses the hermes-slim/wheels cryptography wheel |
 | darwin-arm64 | `macos-latest` | |
 | linux-x64-musl | `ubuntu-latest` in `alpine:3.22` | musl Python from python-build-standalone |
