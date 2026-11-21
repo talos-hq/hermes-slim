@@ -230,6 +230,13 @@ jobs:
             if ($env:SIGN_WINDOWS -eq 'true') { throw "$(@($bad).Count) binaries are not validly signed" }
             Write-Host "::warning::$(@($bad).Count) binaries unsigned: this bundle will not run under Smart App Control"
           }
+      # Signing rewrote binaries in pm-store (rg, git's DLLs); PM's recorded digests must
+      # describe the shipped bytes, or `hermes pm install` replaces them with unsigned ones (#142).
+      - name: Re-record pm-store digests over the signed bytes
+        run: |
+          b="$RUNNER_TEMP/hs-work/hermes-slim"
+          py="$b/python/bin/python3"; [ -e "$py" ] || py="$b/python/python.exe"
+          PYTHONPATH="$b/app" HERMES_HOME="$RUNNER_TEMP/pm-home" "$py" slim/pm_tools.py reseal "$b"
       - name: Package bundle
         run: ${{ steps.py.outputs.bin }} slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
       - name: Publish the Windows zstd helper

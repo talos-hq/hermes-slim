@@ -9,7 +9,8 @@ loose Mach-O found by slim/macho_signatures.py is signed with `codesign --force 
 Then all of them go to Apple's notary service in one submission and the run fails unless
 it comes back Accepted. Loose binaries cannot carry a stapled ticket; Gatekeeper fetches
 the ticket online. Vendor .app bundles (CuaDriver.app) keep their own Developer ID
-signature and are only verified; see machos().
+signature and are only verified, as are binaries already Developer ID signed by their
+vendor (Node); see machos().
 
 Environment:
     APPLE_SIGNING_IDENTITY   "Developer ID Application: …" (required)
@@ -40,38 +41,43 @@ def inside_app(path: Path) -> bool:
 
 
 def machos(paths: list[Path]) -> tuple[list[Path], list[Path]]:
-    """(loose Mach-O files to sign, .app bundles to leave as shipped).
+    """(Mach-O files to sign, vendor-signed files and .app bundles to keep as shipped).
 
     An .app arrives sealed by its vendor (CuaDriver.app: trycua's Developer ID, an
     embedded provisioning profile, entitlements). Re-signing a binary inside it breaks
     the seal, which the notary rejects as "The signature of the binary is invalid", and
     would reset the Accessibility/Screen Recording grants macOS ties to that identity.
+    A loose binary that already carries a vendor's Developer ID signature keeps it too:
+    Node's carries the entitlements V8 needs under the hardened runtime (allow-jit),
+    which ours does not grant (#142).
     """
     found: list[Path] = []
-    apps: set[Path] = set()
+    kept: set[Path] = set()
     for path in paths:
         if path.is_dir():
-            for macho in macho_signatures.scan(path):
+            for macho, kind in macho_signatures.scan(path).items():
                 if inside_app(macho):
-                    apps.add(next(p for p in macho.parents if p.suffix == ".app"))
+                    kept.add(next(p for p in macho.parents if p.suffix == ".app"))
+                elif kind == "developer-id":
+                    kept.add(macho)
                 else:
                     found.append(macho)
         elif macho_signatures.classify(path) is not None:
             found.append(path)
         else:
             raise SystemExit(f"{path} is not a Mach-O binary")
-    return found, sorted(apps)
+    return found, sorted(kept)
 
 
-def verify_apps(apps: list[Path]) -> None:
-    for app in apps:
-        check = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+def verify_kept(kept: list[Path]) -> None:
+    for path in kept:
+        check = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(path)],
                                capture_output=True, text=True, timeout=300, check=False)
-        info = subprocess.run(["codesign", "-dv", "--verbose=2", str(app)],
+        info = subprocess.run(["codesign", "-dv", "--verbose=2", str(path)],
                               capture_output=True, text=True, timeout=60, check=False).stderr
         if check.returncode or "Authority=Developer ID Application" not in info:
-            raise SystemExit(f"{app} is not intact and Developer ID signed: {check.stderr.strip()}")
-        print(f"kept vendor signature: {app.name}", flush=True)
+            raise SystemExit(f"{path} is not intact and Developer ID signed: {check.stderr.strip()}")
+        print(f"kept vendor signature: {path.name}", flush=True)
 
 
 def sign(files: list[Path], identity: str, entitlements: Path) -> None:
@@ -117,9 +123,9 @@ def main() -> int:
     identity = os.environ.get("APPLE_SIGNING_IDENTITY", "")
     if not identity.startswith("Developer ID Application"):
         raise SystemExit("APPLE_SIGNING_IDENTITY must name a Developer ID Application identity")
-    files, apps = machos(args.paths)
+    files, kept = machos(args.paths)
     sign(files, identity, args.entitlements)
-    verify_apps(apps)
+    verify_kept(kept)
     user, password = os.environ.get("APPLE_NOTARY_USER", ""), os.environ.get("APPLE_NOTARY_PASSWORD", "")
     team = re.search(r"\(([A-Z0-9]{10})\)$", identity)
     if user and password and team:

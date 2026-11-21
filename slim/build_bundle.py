@@ -233,9 +233,24 @@ def write_stamp(app: Path, python: Path) -> None:
     described = subprocess.run(["git", "describe", "--tags", "--match", "v*", "--long"],
                                cwd=REPO, capture_output=True, text=True, check=False).stdout.strip()
     tag, distance, _ = described.rsplit("-", 2) if described else ("v0.0.0", "0", "")
-    run([python, REPO / "scripts" / "write_install_stamp.py", "--output", app / "install-stamp.json",
+    stamp = app / "install-stamp.json"
+    run([python, REPO / "scripts" / "write_install_stamp.py", "--output", stamp,
          "--base-version", tag.removeprefix("v"), "--distance", distance,
          "--source", "ci", "--update-mechanism", "external"], cwd=REPO)
+    # pm.paths.bundled_store_root: PM reads the prebuilt tools from here (#142).
+    data = json.loads(stamp.read_text(encoding="utf-8"))
+    data["bundledStore"] = "../pm-store"
+    stamp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def stage_pm_tools(bundle: Path, python: Path, target: str, work: Path) -> None:
+    """Node, npm, ripgrep (and git on Windows) into bundle/pm-store, through PM itself
+    (slim/pm_tools.py), so a client never downloads them (#142). Native builds only:
+    npm's install step runs the target's node."""
+    home = work / "pm-home"
+    shutil.rmtree(home, ignore_errors=True)
+    env = dict(os.environ, PYTHONPATH=str(bundle / "app"), HERMES_HOME=str(home))
+    run([python, REPO / "slim" / "pm_tools.py", "stage", bundle, target], env=env)
 
 
 def slim_python(python_root: Path, stdlib: Path) -> None:
@@ -423,6 +438,11 @@ def stage(target: str, wheels: Path | None, work: Path, host_work: Path) -> Path
             (app / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, app / rel, follow_symlinks=False)
     write_stamp(app, runner)
+    if cross_build:
+        print(f"pm-store: skipped in a cross build (npm's install runs {target}'s node); "
+              "the client's PM downloads node, npm and ripgrep on first use", flush=True)
+    else:
+        stage_pm_tools(bundle, python, target, work)
     write_launchers(bundle, windows)
     slim_python(bundle / "python", bundle / cross.stdlib_dir(target, version))
     if cross_build:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -32,6 +33,27 @@ def install_stamp_path(project_root: Path) -> Path:
     if root.resolve() == repo_root():
         root = install_root()
     return root / "install-stamp.json"
+
+
+def bundled_store_root() -> Path | None:
+    """A read-only tool store shipped inside this install, or ``None``.
+
+    The hermes-slim bundle prebuilds its pinned tools (Node, npm, ripgrep; git on Windows)
+    with PM's own installer into ``<bundle>/pm-store`` and names it in the install stamp's
+    ``bundledStore``, relative to the stamp, so a client never downloads them (#142). PM
+    only reads it: installs and repairs go to the writable store, and a bundle update
+    replaces it whole.
+    """
+    stamp = install_stamp_path(repo_root())
+    try:
+        data = json.loads(stamp.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("bundledStore") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value:
+        return None
+    root = (stamp.parent / value).resolve()
+    return root if (root / "facts.json").is_file() else None
 
 
 def lockfile_path() -> Path:
