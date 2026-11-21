@@ -174,12 +174,16 @@ def check_downloads(report: Report, timing: Path, asset: str) -> None:
                f"{len(bundle)} ranged GETs of {asset}")
     peak = overlap([(r[0], r[1]) for r in bundle])
     report.add("parallel", "bundle ranges in flight at once", peak >= 2, f"peak {peak} concurrent")
-    others = [r for r in gets if r[3] != asset]
-    first_range = min((r[0] for r in bundle), default=None)
-    overlapped = [r for r in others if first_range is not None and any(r[0] < b[1] and b[0] < r[1] for b in bundle)]
-    report.add("parallel", "other downloads overlap the bundle", bool(overlapped) or not others,
-               f"{len(overlapped)}/{len(others)} of {sorted({r[3] for r in others}) or '-'} overlapped the bundle"
-               if others else "no other files fetched")
+    # The bundle's own .sha256 decides whether the bundle is needed at all, so it may come
+    # first; anything else (the zstd helper and its checksum) has no reason to wait. A small
+    # file can finish before the first range starts, so "not queued" means it started before
+    # the bundle's last range ended.
+    others = [r for r in gets if r[3] not in (asset, f"{asset}.sha256")]
+    bundle_done = max((b[1] for b in bundle), default=0.0)
+    queued = [r for r in others if r[0] >= bundle_done]
+    report.add("parallel", "independent downloads don't wait for the bundle", not queued,
+               f"{len(others) - len(queued)}/{len(others)} of {sorted({r[3] for r in others})} started before the bundle finished"
+               if others else "no independent downloads on this platform")
     report.details.append("<details><summary>request timeline (range server)</summary>\n\n```\n"
                           + "\n".join(f"{r[0] - rows[0][0]:8.3f}s → {r[1] - rows[0][0]:8.3f}s  {r[2]} {r[3]} {r[4]}" for r in rows)
                           + "\n```\n</details>" if rows else "")
