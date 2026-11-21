@@ -202,10 +202,20 @@ jobs:
     needs: bundle
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: slim/release_manifest.py
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      # Installers resolve assets from this CDN-served file instead of the rate-limited API (#146).
+      - name: Write the release manifest
+        run: |
+          python3 slim/release_manifest.py dist --tag "${{ github.ref_name }}" > hermes-slim-manifest.txt
+          mv hermes-slim-manifest.txt dist/
+          cat dist/hermes-slim-manifest.txt
       - env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" -R "${{ github.repository }}" --generate-notes dist/*

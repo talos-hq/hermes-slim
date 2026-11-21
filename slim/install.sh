@@ -226,18 +226,41 @@ case "$archive" in
       [ "$expected" = "$(sha256 "$archive")" ] || { echo "hermes-slim: sha256 mismatch" >&2; exit 1; }
     fi ;;
   *)
-    # One API call gives both the tag and the asset names.
-    if [ "$version" = latest ]; then release_api="releases/latest"; else release_api="releases/tags/$version"; fi
-    curl -fsSL "https://api.github.com/repos/$repo/$release_api" >"$tmp/release.json"
-    tag="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/release.json" | head -1)"
-    [ -z "$tag" ] || version="$tag"
+    # The release manifest (slim/release_manifest.py) is served by the release CDN, which,
+    # unlike api.github.com (60 unauthenticated calls per hour per IP), does not run out on
+    # a shared network (#146). It names the tag, so every download pins to one release.
+    if [ "$version" = latest ]; then manifest_base="https://github.com/$repo/releases/latest/download"
+    else manifest_base="https://github.com/$repo/releases/download/$version"; fi
+    if curl -fsSL --retry 3 -o "$tmp/manifest" "$manifest_base/hermes-slim-manifest.txt" 2>/dev/null; then
+      tag="$(sed -n 's/^release \([^ ]*\)$/\1/p' "$tmp/manifest" | head -1)"
+      [ -z "$tag" ] || version="$tag"
+      line="$(grep "^bundle $target hermes-slim-[^ ]*\.tar\.zst " "$tmp/manifest" | head -1)"
+      asset="$(echo "$line" | cut -d' ' -f3)"
+      expected="$(echo "$line" | cut -d' ' -f4)"
+    else
+      # Releases from before the manifest: one API call gives the tag and the asset names.
+      if [ "$version" = latest ]; then release_api="releases/latest"; else release_api="releases/tags/$version"; fi
+      if ! curl -fsSL "https://api.github.com/repos/$repo/$release_api" >"$tmp/release.json" 2>"$tmp/api.err"; then
+        if grep -qE "error: (403|429)" "$tmp/api.err"; then
+          echo "hermes-slim: GitHub's API rate limit for this network is used up; retry later, or pass --archive URL" >&2
+        else
+          echo "hermes-slim: could not read release $version of $repo: $(cat "$tmp/api.err")" >&2
+        fi
+        exit 1
+      fi
+      tag="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/release.json" | head -1)"
+      [ -z "$tag" ] || version="$tag"
+      asset="$(sed -n "s/.*\"name\": *\"\(hermes-slim-[^\"]*-$target\.tar\.zst\)\".*/\1/p" "$tmp/release.json" | head -1)"
+      expected=""
+    fi
     [ "$version" != latest ] || { echo "hermes-slim: could not read the latest release of $repo" >&2; exit 1; }
-    asset="$(sed -n "s/.*\"name\": *\"\(hermes-slim-[^\"]*-$target\.tar\.zst\)\".*/\1/p" "$tmp/release.json" | head -1)"
-    [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release ${version:-$release_api}" >&2; exit 1; }
+    [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release $version" >&2; exit 1; }
     base="https://github.com/$repo/releases/download/$version"
     start_helper
-    curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
-    expected="$(cut -d' ' -f1 "$tmp/$asset.sha256")"
+    if [ -z "$expected" ]; then
+      curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
+      expected="$(cut -d' ' -f1 "$tmp/$asset.sha256")"
+    fi
     if need_bundle; then fetch "$base/$asset" "$dir/downloads/$asset" "$expected"; fi
     archive="$dir/downloads/$asset" ;;
 esac

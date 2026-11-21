@@ -160,14 +160,37 @@ if ($Archive -match '^https?://') {
         if ((Get-Sha256 $Archive) -ne $expected) { throw "sha256 mismatch" }
     }
 } else {
-    $api = if ($Version -eq "latest") { "https://api.github.com/repos/$repo/releases/latest" } else { "https://api.github.com/repos/$repo/releases/tags/$Version" }
-    $release = Invoke-RestMethod $api
-    $asset = $release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.zip" } | Select-Object -First 1
-    if (-not $asset) { throw "no $target bundle in release $($release.tag_name)" }
-    $sum = $release.assets | Where-Object { $_.name -eq "$($asset.name).sha256" } | Select-Object -First 1
-    $expected = ((Get-Text $sum.browser_download_url) -split '\s+')[0]
-    $Archive = Join-Path $downloads $asset.name
-    if (Test-NeedBundle) { Receive-File $asset.browser_download_url $Archive $expected }
+    # The release manifest (slim/release_manifest.py) is served by the release CDN, which,
+    # unlike api.github.com (60 unauthenticated calls per hour per IP), does not run out on
+    # a shared network (#146). It names the tag, so every download pins to one release.
+    $manifestBase = if ($Version -eq "latest") { "https://github.com/$repo/releases/latest/download" } else { "https://github.com/$repo/releases/download/$Version" }
+    $manifest = $null
+    try { $manifest = Get-Text "$manifestBase/hermes-slim-manifest.txt" } catch { }
+    if ($manifest) {
+        $lines = $manifest -split "`r?`n"
+        $tagLine = $lines | Where-Object { $_ -match '^release (\S+)$' } | Select-Object -First 1
+        if ($tagLine -match '^release (\S+)$') { $Version = $Matches[1] }
+        $entry = $lines | Where-Object { $_ -match "^bundle $target (hermes-slim-\S+\.zip) ([0-9a-f]{64}) " } | Select-Object -First 1
+        if (-not $entry) { throw "no $target bundle in release $Version" }
+        $null = $entry -match "^bundle $target (\S+) (\S+) "
+        $name = $Matches[1]; $expected = $Matches[2]
+    } else {
+        # Releases from before the manifest: look the asset up through the API.
+        $api = if ($Version -eq "latest") { "https://api.github.com/repos/$repo/releases/latest" } else { "https://api.github.com/repos/$repo/releases/tags/$Version" }
+        try { $release = Invoke-RestMethod $api }
+        catch {
+            $status = [int]$_.Exception.Response.StatusCode
+            if ($status -eq 403 -or $status -eq 429) { throw "GitHub's API rate limit for this network is used up; retry later, or pass -Archive URL" }
+            throw
+        }
+        $Version = $release.tag_name
+        $asset = $release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.zip" } | Select-Object -First 1
+        if (-not $asset) { throw "no $target bundle in release $Version" }
+        $name = $asset.name
+        $expected = ((Get-Text "https://github.com/$repo/releases/download/$Version/$name.sha256") -split '\s+')[0]
+    }
+    $Archive = Join-Path $downloads $name
+    if (Test-NeedBundle) { Receive-File "https://github.com/$repo/releases/download/$Version/$name" $Archive $expected }
 }
 
 if (Test-Installed $current) {
