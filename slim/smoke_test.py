@@ -8,7 +8,9 @@ against a throwaway HERMES_HOME, and checks that:
   1. the bundled interpreter imports every compiled dependency,
   2. config.yaml/.env hold the OpenRouter autofill,
   3. the gateway starts and answers /health,
-  4. (optional, OPENROUTER_API_KEY set) the model answers a real prompt.
+  4. computer use is baked in: the bundled cua-driver meets the runtime contract, and on Linux
+     (Xvfb + xterm on PATH) list_windows + a screenshot work through Hermes' tool layer,
+  5. (optional, OPENROUTER_API_KEY set) the model answers a real prompt.
 Stdlib only.
 """
 
@@ -21,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -32,6 +35,48 @@ FAKE_KEY = "sk-or-v1-" + "0" * 64
 
 def step(msg: str) -> None:
     print(f"\n=== {msg}", flush=True)
+
+
+def computer_use_smoke(bundle: Path, py: Path, env: dict) -> None:
+    """The baked-in driver meets Hermes' runtime contract (every target that has one); on Linux with
+    Xvfb + xterm on PATH, list_windows and a screenshot go through Hermes' computer_use tool layer
+    (slim/computer_use_smoke.py) against a private X display. musl bundles carry no driver."""
+    script = [py, bundle / "app" / "slim" / "computer_use_smoke.py", "--bundle", bundle]
+    run_env = dict(env, PYTHONPATH=str(bundle / "app"), HERMES_SLIM="1")
+    if not (bundle / "tools" / "cua-driver").is_dir():
+        print("no bundled cua-driver (no build for this target); skipped")
+        return
+    xvfb, xterm = shutil.which("Xvfb"), shutil.which("xterm")
+    if not (sys.platform.startswith("linux") and xvfb and xterm):
+        subprocess.run([*script, "--contract-only"], env=run_env, check=True, timeout=300)
+        return
+    display, title = ":93", "hermes-cua-smoke"
+    server = subprocess.Popen([xvfb, display, "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    client = None
+    try:
+        x_env = {k: v for k, v in run_env.items() if k not in ("WAYLAND_DISPLAY", "XAUTHORITY")}
+        x_env["DISPLAY"] = display
+        client = _start_x_client([xterm, "-T", title, "-e", "sleep", "300"], x_env)
+        subprocess.run([*script, "--expect-window", title], env=x_env, check=True, timeout=300)
+    finally:
+        for proc in (client, server):
+            if proc is not None:
+                proc.terminate()
+                proc.wait(timeout=30)
+
+
+def _start_x_client(argv: list, env: dict) -> subprocess.Popen:
+    """Start an X client once the fresh Xvfb accepts connections (a client started first just exits)."""
+    deadline = time.monotonic() + 30
+    while True:
+        proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            return proc  # still running: it connected and mapped its window
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{argv[0]} could not connect to {env['DISPLAY']}")
 
 
 def main() -> int:
@@ -59,6 +104,9 @@ def main() -> int:
     step("compiled imports")
     subprocess.run([py, "-c", f"import importlib; [importlib.import_module(m) for m in {COMPILED!r}]; print('ok')"],
                    env=env, check=True)
+
+    step("computer use: bundled cua-driver")
+    computer_use_smoke(bundle, py, env)
 
     step("hermes --version")
     subprocess.run([hermes, "--version"], env=env, check=True, timeout=300)

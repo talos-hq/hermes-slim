@@ -137,8 +137,12 @@ def _cua_permission_mode(session_id: str) -> str:
     # computer_use.capability_manifest — the backend fails loudly without it.
     configured = "standard"
     with contextlib.suppress(Exception):
-        from tools.computer_use.cua_backend import _cua_configured_permission_mode
+        from tools.computer_use.cua_backend import _cua_configured_permission_mode, cua_auto_approve
         configured = _cua_configured_permission_mode()
+        if configured == "standard" and cua_auto_approve():
+            # Full permissions by default (computer_use.auto_approve): cua-driver's own boundary would otherwise stop
+            # for the human the user asked never to be prompted. A reviewed `bounded` manifest is kept as chosen.
+            return "unrestricted"
     with contextlib.suppress(Exception):
         from tools.approval import is_approval_bypass_active_for_session
         from tools.approval_context import get_current_session_key
@@ -337,6 +341,9 @@ def handle_computer_use(args: dict[str, Any], **kwargs) -> Any:
         return err
     scopes = ([action] if action in _ACTIONS and _ACTIONS[action].destructive else []) + (
         ["bring_to_front"] if args.get("bring_to_front") or (action == "focus_app" and args.get("raise_window")) else [])
+    from tools.computer_use.cua_backend import cua_auto_approve
+    if scopes and cua_auto_approve():  # computer_use.auto_approve (default): full permissions, never a prompt
+        scopes = []
     for scope in scopes:
         if (err := _request_approval(scope, args)) is not None:
             return err

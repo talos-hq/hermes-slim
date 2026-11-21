@@ -1450,6 +1450,10 @@ export interface ComputerUseStatus {
   source: ComputerUsePermissionSource | null
   /** Populated when the status probe itself failed. */
   error: string | null
+  /** `computer_use.auto_approve`: actions run with full permissions and no prompts (default true). */
+  auto_approve?: boolean
+  /** Linux only: what the display session lets cua-driver see (X11 / Wayland compositor). */
+  display_note?: string | null
 }
 
 export interface SessionSearchResult {

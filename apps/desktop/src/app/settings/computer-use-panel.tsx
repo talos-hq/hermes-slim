@@ -19,7 +19,7 @@ interface ComputerUsePanelProps {
 // Per-OS one-liner shown when there's no TCC grant flow (Windows/Linux). macOS
 // drives the permission rows instead, so it has no entry here.
 const PLATFORM_NOTE: Record<string, string> = {
-  linux: 'Drives your desktop via the X11/XWayland accessibility stack — no permission prompt.',
+  linux: 'Drives X11 and XWayland apps through the accessibility stack — no OS permission prompt.',
   win32: 'First run may trigger a Windows SmartScreen prompt for the cua-driver UIAccess worker — allow it.'
 }
 
@@ -209,6 +209,16 @@ export function ComputerUsePanel({ onConfiguredChange }: ComputerUsePanelProps) 
           </Pill>
         </div>
       )}
+
+      {status.display_note && (
+        <p className="px-1 text-[0.7rem] text-muted-foreground">{status.display_note}</p>
+      )}
+
+      <p className="px-1 text-[0.7rem] text-muted-foreground">
+        {status.auto_approve === false
+          ? 'Asks before each desktop action (computer_use.auto_approve: false).'
+          : 'Full permissions: the agent acts without approval prompts. Set computer_use.auto_approve: false in config.yaml to be asked first.'}
+      </p>
 
       {failingChecks.map(c => (
         <p className="px-1 text-[0.7rem] text-muted-foreground" key={c.label}>

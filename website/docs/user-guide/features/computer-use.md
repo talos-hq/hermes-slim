@@ -55,6 +55,20 @@ runs](./bot-screen.md#where-the-screen-runs).
 
 ## Enabling
 
+**Computer Use is on by default, with full permissions.** A fresh install has
+the `computer_use` toolset enabled, the pinned driver provisioned, and no
+approval prompts (see [Permission modes](#permission-modes-and-logged-in-browser-profiles)).
+The bundled `computer-use` skill tells the agent how to use it, how to repair
+it, and what each platform supports.
+
+**hermes-slim bakes the driver into the bundle.** The pinned, sha256-verified
+`cua-driver` from `pm/lock.json` ships at `<bundle>/tools/cua-driver/` on
+every target cua-driver publishes a build for (macOS, Windows, glibc Linux;
+not the musl bundle). Hermes uses it directly — no Hermes PM runtime and no
+first-use download — and `hermes-slim-setup` validates it (and on macOS
+registers `CuaDriver.app` and asks once for the permission grants).
+`hermes computer-use status` reports it as `[bundled with this install]`.
+
 **The driver ships with Hermes.** `cua-driver` is pinned in `pm/lock.json`
 and is a default PM package: the installers, a bare `hermes pm install`, and
 `hermes update` install it on every macOS, Windows, and glibc Linux target
@@ -81,6 +95,13 @@ This asks PM to prepare the pinned `cua-driver` package (verified against
 `pm/lock.json`) — it does not run the upstream installer. Use
 `hermes computer-use status` to verify the install.
 
+**Self-repair on first use.** The toolset stays available while the pinned
+driver is missing, removed, or pinned to another version, as long as Hermes PM
+may install it (`security.allow_lazy_installs`, the default) and you did not
+decline it. The first `computer_use` call then installs or repairs the pin
+before acting. A declined package or disabled lazy installs keep the tool out
+until `hermes computer-use install`.
+
 Already have cua-driver? Hermes reuses it when it supports the 0.20 runtime
 contract. During setup, toolset enablement, `hermes update`, and the first
 `computer_use` call of a session, Hermes checks the local version and
@@ -103,9 +124,9 @@ platform-appropriate prereqs:
 
 | Platform | Prereqs |
 |---|---|
-| **macOS** | System Settings → Privacy & Security → **Accessibility** + **Screen Recording**. Grant the identity named by `hermes computer-use doctor` (CuaDriver, `com.trycua.driver`, in every permission mode — the driver daemon always launches through `CuaDriver.app`). |
+| **macOS** | System Settings → Privacy & Security → **Accessibility** + **Screen Recording** for CuaDriver (`com.trycua.driver`, in every permission mode — the driver daemon always launches through `CuaDriver.app`). macOS cannot grant these silently, so Hermes raises the OS dialog **once per machine** — during an interactive `hermes computer-use install` / `hermes-slim-setup`, or else on the first `computer_use` call — and never again (marker: `~/.hermes/computer_use/tcc-grant-requested`). `hermes computer-use permissions grant` raises it again on demand. |
 | **Windows** | None at install time. If you're driving over SSH (not RDP / console), you need the autostart pattern — see [cua.ai/docs/how-to-guides/driver/windows-ssh](https://cua.ai/docs/how-to-guides/driver/windows-ssh) for the Session 0 ↔ Session 1+ proxy. |
-| **Linux** | A reachable display server: `DISPLAY` set for X11, or `XDG_SESSION_TYPE=wayland`. Wayland sessions need an XWayland bridge for capture. AT-SPI must be on (default on GNOME/KDE/Xfce). |
+| **Linux** | A reachable display server; AT-SPI on (default on GNOME/KDE/Xfce). X11 is fully supported. Wayland depends on the compositor — see [Linux: X11 and Wayland](#linux-x11-and-wayland). |
 
 Then start a session with the toolset enabled:
 
@@ -117,13 +138,28 @@ or add `computer_use` to your enabled toolsets in `~/.hermes/config.yaml`.
 
 ## Permission modes and logged-in browser profiles
 
-Hermes maps its existing approval UX onto cua-driver's immutable runtime
-modes. Permission mode and capability manifest approval are launch settings.
-They cannot change after the runtime starts:
+**Default: full permissions, no prompts.** `computer_use.auto_approve: true`
+(the default) skips Hermes approval prompts for `computer_use` actions —
+including in cron jobs and gateway turns, where nobody is there to answer —
+and launches cua-driver's private `unrestricted` runtime, so the driver does
+not stop to ask either. The hard blocks (log out, lock screen, force-empty
+trash, dangerous shell text typed into a window) still apply. To be asked
+before each desktop action again:
+
+```yaml
+# config.yaml
+computer_use:
+  auto_approve: false
+```
+
+With `auto_approve: false`, Hermes maps its approval UX onto cua-driver's
+immutable runtime modes. Permission mode and capability manifest approval are
+launch settings. They cannot change after the runtime starts:
 
 | Hermes session | cua-driver mode | Human intervention |
 |---|---|---|
-| Manual or smart approvals (default) | `standard` | Normal Hermes approvals; Cua stops at its protected boundary |
+| `computer_use.auto_approve: true` (default) | private `unrestricted` daemon | None |
+| `auto_approve: false`, manual or smart approvals | `standard` | Normal Hermes approvals; Cua stops at its protected boundary |
 | `computer_use.permission_mode: bounded` + reviewed manifest | private `bounded` daemon | You review and approve the capability manifest once, at launch |
 | `--yolo`, `/yolo`, or `approvals.mode: off` | private `unrestricted` daemon | One explicit Hermes risk acceptance; no runtime Cua prompts |
 
@@ -177,12 +213,15 @@ unrestricted modes use a private embedded daemon, launched through
 `CuaDriver.app` on macOS (see above).
 
 `smart` approval remains `standard`: an LLM classification cannot stand in for
-a reviewed manifest.
+a reviewed manifest. A configured `bounded` manifest is kept as configured even
+with `auto_approve: true`.
 
 <div class="alert alert--warning">
 
-YOLO/unrestricted mode does not protect against prompt injection or unintended
-input. Use it only in a disposable VM or with accounts and data whose full
+Full permissions (the default), YOLO and unrestricted mode do not protect
+against prompt injection or unintended input. Anyone allowed to message a gateway
+bot with this toolset can drive the desktop. Set `computer_use.auto_approve:
+false` (or disable the toolset for that platform) where that is not acceptable. Use it only in a disposable VM or with accounts and data whose full
 compromise you accept.
 
 </div>
@@ -474,14 +513,48 @@ of screenshot context, not ~600K.
     Screen pane or `hermes computer-use screen start`; it starts on
     first use (the first `computer_use` call or headed browser use) only
     when `bot_desktop.auto_start: true` is set (off by default).
-    Pure Wayland sessions need an XWayland bridge for screen capture
-    (cua-driver's Wayland inject path handles input independently).
+    Wayland support depends on the compositor; see
+    [Linux: X11 and Wayland](#linux-x11-and-wayland).
 
 For cross-platform GUI automation without the desktop overhead (and
 without TCC / Session 0 / X11 setup), the `browser` toolset uses a
 real headless Chromium and is the right answer for web-only tasks.
 
+### Linux: X11 and Wayland
+
+cua-driver (0.21) drives X11 and XWayland through XTest and AT-SPI. Its native
+Wayland backend needs the wlroots protocols (foreign-toplevel, screencopy,
+virtual pointer/keyboard). What that means per session:
+
+| Session | What works | Hermes default |
+|---|---|---|
+| X11 | Everything | — |
+| Wayland: Hyprland, Sway, labwc, river, Wayfire | Native and XWayland windows | Native backend on (`native_wayland: auto`) |
+| Wayland: GNOME | XWayland apps only; native windows after installing cua's Shell helper (`wayland-helper/install.sh` in the driver directory, log out/in) and setting `native_wayland: true` | XWayland |
+| Wayland: KDE Plasma | XWayland apps only (no KWin adapter upstream yet); native windows never appear in `list_windows` and full-screen capture fails | XWayland |
+| No display | Nothing until a display exists | Use [Bot Screen](./bot-screen.md) |
+
+Where only XWayland is visible, run the target app under XWayland
+(Qt `QT_QPA_PLATFORM=xcb`, GTK `GDK_BACKEND=x11`, Chromium/Electron
+`--ozone-platform=x11`), use the browser tools for web pages, or drive Hermes'
+own X11 screen (`hermes computer-use screen start`). `hermes computer-use
+status`, `doctor` and the empty-`list_windows` error all name the case that
+applies.
+
+A Hermes process that outlives a desktop logout can keep an `XAUTHORITY` that
+points at a deleted cookie, and then every X11 connection is refused (empty
+`list_windows`). When the session's runtime directory holds exactly one
+`xauth_*` cookie, Hermes hands that one to the driver; otherwise status and
+doctor tell you to restart Hermes from the current session.
+
 ## Configuration
+
+Full permissions are the default (see [Permission modes](#permission-modes-and-logged-in-browser-profiles)):
+
+```yaml
+computer_use:
+  auto_approve: true               # default; false = ask before each desktop action
+```
 
 Permission mode and manifest (see
 [Permission modes](#permission-modes-and-logged-in-browser-profiles) above):
@@ -492,13 +565,14 @@ computer_use:
   capability_manifest: ""          # capability manifest path, required for bounded
 ```
 
-On Linux, native Wayland support remains an explicit opt-in. Hermes passes the
-opt-in to every cua-driver process, including gateway sessions, only when that
-process also has `WAYLAND_DISPLAY`:
+On Linux, `native_wayland` selects cua-driver's native Wayland backend.
+`auto` (default) enables it on wlroots compositors only; `true` / `false`
+force it. Hermes passes it to every cua-driver process, including gateway
+sessions, only when that process also has `WAYLAND_DISPLAY`:
 
 ```yaml
 computer_use:
-  native_wayland: true
+  native_wayland: auto             # auto | true | false
 ```
 
 Restart a running gateway after changing this setting.

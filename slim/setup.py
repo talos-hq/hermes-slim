@@ -141,6 +141,22 @@ def write_config(first: str, last: str, key: str, model: str, api_port: int) -> 
     return {"home": str(hc.get_config_path().parent), "config": str(hc.get_config_path()), "env": str(hc.get_env_path())}
 
 
+def prepare_computer_use(interactive: bool) -> dict:
+    """Make the baked-in computer use ready now rather than on first use: validate the bundled
+    cua-driver and do the host setup (macOS: register CuaDriver.app and, when interactive, ask once
+    for Accessibility + Screen Recording). Never fatal: a host that cannot run the driver (no
+    display libraries, or a musl bundle with no driver) still gets a working Hermes, and the
+    computer-use skill tells the agent how to repair it (`hermes computer-use install`)."""
+    from hermes_cli.tools_config_cua import install_cua_driver
+    from tools.computer_use.cua_backend_driver import resolve_cua_driver_cmd
+
+    try:
+        ready = install_cua_driver(show_installer_progress=interactive)
+    except Exception as e:  # health: allow BLE001 -- setup must finish on a host that cannot run the driver; the error goes into the summary
+        return {"ready": False, "driver": resolve_cua_driver_cmd(), "error": str(e)}
+    return {"ready": bool(ready), "driver": resolve_cua_driver_cmd()}
+
+
 def _read_env(path: Path) -> dict:
     out = {}
     if path.exists():
@@ -246,6 +262,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--skip-online-checks", action="store_true", default=bool(e("HS_SKIP_ONLINE_CHECKS")),
                     help="do not validate the OpenRouter key against the API")
     ap.add_argument("--no-gateway", action="store_true", help="write config only")
+    ap.add_argument("--skip-computer-use", action="store_true", default=bool(e("HS_SKIP_COMPUTER_USE")),
+                    help="do not prepare the bundled computer-use driver now (the first use still does)")
     ap.add_argument("--service", action="store_true", default=bool(e("HS_SERVICE")),
                     help="install the gateway as a login service (launchd/systemd/Windows task)")
     ap.add_argument("--gateway-only", action="store_true",
@@ -300,6 +318,8 @@ def main(argv=None) -> int:
         model = args.model.strip()
         paths = write_config(first, last, key, model, args.api_port)
         summary = {"ok": True, "first_name": first, "last_name": last, "model": model, **paths}
+        if not args.skip_computer_use:
+            summary["computer_use"] = prepare_computer_use(interactive)
         if not args.no_gateway:
             log = Path(paths["home"]) / "logs" / "slim-gateway.log"
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -312,6 +332,10 @@ def main(argv=None) -> int:
         print(json.dumps(summary))
     else:
         print(f"✓ configured {model} via OpenRouter in {summary['home']}")
+        if summary.get("computer_use", {}).get("ready"):
+            print("✓ computer use ready (cua-driver, full permissions; computer_use.auto_approve: false to be asked)")
+        elif "computer_use" in summary:
+            print("• computer use not ready on this host; `hermes computer-use doctor` explains why")
         if "gateway" in summary:
             print(f"✓ gateway healthy on 127.0.0.1:{args.api_port}")
     return 0

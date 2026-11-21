@@ -100,7 +100,7 @@ def test_takeover_during_an_admitted_action_discards_its_result(monkeypatch):
     assert res["code"] == "human_has_control" and "SECRET" not in json.dumps(res)
 
 
-def test_takeover_handback_during_approval_does_not_start_the_device_op(monkeypatch):
+def test_takeover_handback_during_approval_does_not_start_the_device_op(monkeypatch, computer_use_prompting):
     """A full take-over / hand-back during approval leaves holder=agent, so assert_agent_may_act
     succeeds. Input still belongs to the human's turn: compare admitted.epoch before _dispatch,
     not only after. Do not patch _dispatch — a recording backend must never be called."""
