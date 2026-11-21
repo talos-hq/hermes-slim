@@ -19,7 +19,8 @@ Telegram bot provisioning comes in a later phase.
 ## Targets
 | id            | runner            | python                      |
 |---------------|-------------------|-----------------------------|
-| win32-x64      | windows-latest              | python-build-standalone 3.14.9 |
+| win32-x64      | windows-latest              | python.org NuGet `python` 3.14.9 (PSF-signed) |
+| win32-arm64    | windows-11-arm              | python.org NuGet `pythonarm64` 3.14.9 (PSF-signed); install.ps1 picks it on ARM64 and falls back to x64 (emulated) for releases without it (#143) |
 | darwin-x64     | macos-15-intel              | python-build-standalone 3.14.9 |
 | darwin-arm64   | macos-latest                | python-build-standalone 3.14.9 |
 | linux-x64-musl | ubuntu-latest + alpine:3.22 | python-build-standalone 3.14.9 (musl) |

@@ -95,6 +95,8 @@ def machine_target() -> tuple[str, str]:
     arm = platform.machine().lower() in ("arm64", "aarch64") or os.environ.get("PROCESSOR_ARCHITEW6432", "").upper() == "ARM64" \
         or os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() == "ARM64"
     if WINDOWS:
+        # The installer falls back to win32-x64 when a release has no native bundle; main()
+        # switches to the native one when it is published.
         return ("win32-arm64" if arm else "win32-x64"), "win32-x64"
     if MACOS:
         # Under Rosetta platform.machine() says x86_64; sysctl tells the truth.
@@ -310,9 +312,11 @@ def main() -> int:
 
     rel = api(f"repos/{REPO}/releases/latest" if args.version == "latest" else f"repos/{REPO}/releases/tags/{args.version}")
     assets = {a["name"]: a["browser_download_url"] for a in rel["assets"]}
-    report.add("bundled", f"native {native} bundle published", any(f"-{native}." in n for n in assets),
-               "found" if any(f"-{native}." in n for n in assets) else
-               f"no {native} asset in {rel['tag_name']}; the installer uses {target}")
+    published = any(f"-{native}." in n for n in assets)
+    if WINDOWS and published:
+        target = native  # install.ps1 picks the native bundle when the release has one (#143)
+    report.add("bundled", f"native {native} bundle published", published,
+               "found" if published else f"no {native} asset in {rel['tag_name']}; the installer uses {target}")
     # Prefer the .tar.zst: a Windows release carries a transitional .zip as well (#141).
     asset = next((n for ext in ("tar.zst", "zip") for n in assets if n.endswith(f"-{target}.{ext}")), None)
     if not asset:
@@ -335,10 +339,13 @@ def main() -> int:
 
     # 2. The same files through the range server, to see what ran in parallel.
     mirror = work / "mirror"
-    for name in [asset, f"{asset}.sha256"] + [n for n in assets if n.startswith(f"zstd-{target}")]:
+    # Both Windows targets unpack with the x64 helper (no ARM64 zstd build upstream).
+    helper = "zstd-win32-x64" if WINDOWS else f"zstd-{target}"
+    for name in [asset, f"{asset}.sha256"] + [n for n in assets if n.startswith(helper)]:
         download(assets[name], mirror / name)
-    if MACOS:
-        helpers = [n for n in assets if n.startswith("zstd-darwin") and not n.endswith(".sha256")]
+    # The helper runs on the user's machine before anything in the bundle: it must be signed too.
+    if MACOS or WINDOWS:
+        helpers = [n for n in assets if n.startswith("zstd-darwin" if MACOS else helper) and not n.endswith(".sha256")]
         for name in helpers:
             download(assets[name], work / "helpers" / name)
         if helpers:

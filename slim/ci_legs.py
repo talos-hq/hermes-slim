@@ -25,6 +25,7 @@ NOT_ACQUIRED = "not acquired by Runner"
 
 LEGS = (
     {"target": "win32-x64", "os": "windows-latest"},
+    {"target": "win32-arm64", "os": "windows-11-arm"},
     {"target": "darwin-x64", "os": "macos-15-intel"},
     {"target": "darwin-arm64", "os": DEFAULT_ARM_IMAGE},
     {"target": "linux-x64", "os": "ubuntu-latest"},

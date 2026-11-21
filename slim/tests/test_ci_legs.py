@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import build_bundle
 import ci_legs as c
 
 NOT_ACQUIRED = "The job was not acquired by Runner of type hosted even after multiple attempts"
@@ -25,7 +26,8 @@ class LegTests(unittest.TestCase):
 
     def test_push_builds_every_leg_on_the_pinned_arm_image(self):
         legs, skipped = c.select_legs("push", [], "")
-        self.assertEqual(len(legs), 6)
+        # Every target build_bundle.py can build ships from a release: each needs a leg.
+        self.assertEqual(set(self.targets(legs)), set(build_bundle.TARGETS))
         self.assertEqual(self.targets(legs)["darwin-arm64"], c.DEFAULT_ARM_IMAGE)
         self.assertNotEqual(c.DEFAULT_ARM_IMAGE, "macos-latest")
         self.assertEqual(skipped, [])
