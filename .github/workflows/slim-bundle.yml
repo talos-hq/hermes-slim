@@ -162,6 +162,13 @@ jobs:
             [ "$SIGNED" != true ] || { echo "::error::Mach-O binaries left without a Developer ID signature"; exit 1; }
             echo "::warning::unsigned darwin bundle (PR without signing secrets)"
           fi
+      # install.ps1 unpacks the .tar.zst bundle with this helper and tar.exe (#141). It runs
+      # before anything else in the release, so it is signed with the bundle's binaries.
+      - name: Standalone zstd for Windows clients
+        if: matrix.target == 'win32-x64'
+        run: |
+          ${{ steps.py.outputs.bin }} slim/zstd_windows.py "$RUNNER_TEMP/hs-work/helper"
+          printf 'helper\\zstd-win32-x64.exe\n' >> "$RUNNER_TEMP/hs-work/unsigned.txt"
       # Smart App Control (on by default on new Windows 11 installs) refuses unsigned
       # binaries, the wheels' .pyd/.dll included. The interpreter is python.org's
       # (PSF-signed); everything stage listed as unsigned is signed here with our
@@ -215,7 +222,7 @@ jobs:
         if: matrix.target == 'win32-x64'
         shell: pwsh
         run: |
-          $bad = Get-ChildItem -Recurse -File "$env:RUNNER_TEMP/hs-work/hermes-slim" -Include *.exe,*.dll,*.pyd |
+          $bad = Get-ChildItem -Recurse -File "$env:RUNNER_TEMP/hs-work/hermes-slim", "$env:RUNNER_TEMP/hs-work/helper" -Include *.exe,*.dll,*.pyd |
             Get-AuthenticodeSignature | Where-Object Status -ne 'Valid'
           $bad | ForEach-Object { Write-Host "$($_.Status)  $($_.Path)" }
           if ($bad) {
@@ -225,6 +232,12 @@ jobs:
           }
       - name: Package bundle
         run: ${{ steps.py.outputs.bin }} slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
+      - name: Publish the Windows zstd helper
+        if: matrix.target == 'win32-x64'
+        run: |
+          cp "$RUNNER_TEMP/hs-work/helper/zstd-win32-x64.exe" dist/
+          # The checksum describes the signed bytes.
+          (cd dist && sha256sum zstd-win32-x64.exe > zstd-win32-x64.exe.sha256)
       # A private X display for the smoke test's computer-use step (list_windows + a screenshot through
       # Hermes' computer_use tool layer against the bundled cua-driver). The libs are cua-driver's own.
       - name: Computer-use test display
