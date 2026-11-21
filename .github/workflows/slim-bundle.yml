@@ -96,6 +96,72 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           ${{ steps.py.outputs.bin }} slim/build_bundle.py --target ${{ matrix.target }} --wheels wheels --work "$RUNNER_TEMP/hs-work" --stage-only
+      # Built before signing so the macOS helper is signed and notarized with the bundle.
+      - name: Standalone zstd for clients without one
+        if: matrix.target == 'linux-x64-musl' || startsWith(matrix.target, 'darwin-')
+        run: sh slim/build_zstd.sh dist
+      # Gatekeeper, the .pkg path and notarization need every Mach-O signed with our
+      # Developer ID, hardened runtime and a secure timestamp (#140). Builds that publish
+      # (main pushes, v* tags) fail closed without the org secrets; PRs from forks get no
+      # secrets and only warn.
+      - name: Import Developer ID certificate
+        id: macsign
+        if: startsWith(matrix.target, 'darwin-')
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_NOTARY_USER APPLE_NOTARY_PASSWORD; do
+            [ -z "${!name}" ] && missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            if [ "$EVENT" = pull_request ]; then
+              echo "::warning::macOS signing secrets unavailable (${missing[*]}): this PR's darwin bundle stays unsigned"
+              echo "sign=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::macOS signing/notarization secrets missing: ${missing[*]}"
+            exit 1
+          fi
+          p12="$RUNNER_TEMP/cert.p12"
+          printf '%s' "$CSC_LINK" | base64 --decode > "$p12"
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pw="$(uuidgen)"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security import "$p12" -k "$kc" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" >/dev/null
+          # shellcheck disable=SC2046 # the existing search list must split
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm -f "$p12"
+          identity="$(security find-identity -v -p codesigning "$kc" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+          test -n "$identity" || { echo "::error::no Developer ID Application identity in CSC_LINK"; exit 1; }
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "sign=true" >> "$GITHUB_OUTPUT"
+      - name: Sign and notarize macOS binaries
+        if: steps.macsign.outputs.sign == 'true'
+        env:
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          python3 slim/macos/sign_tree.py --entitlements slim/macos/entitlements.plist \
+            "$RUNNER_TEMP/hs-work/hermes-slim" dist/zstd-${{ matrix.target }}
+          # The helper's checksum must describe the signed bytes.
+          (cd dist && shasum -a 256 zstd-${{ matrix.target }} > zstd-${{ matrix.target }}.sha256)
+      - name: Verify every Mach-O is Developer ID signed
+        if: startsWith(matrix.target, 'darwin-')
+        env:
+          SIGNED: ${{ steps.macsign.outputs.sign }}
+        run: |
+          if ! python3 slim/macho_signatures.py "$RUNNER_TEMP/hs-work/hermes-slim" --list --fail-unsigned; then
+            [ "$SIGNED" != true ] || { echo "::error::Mach-O binaries left without a Developer ID signature"; exit 1; }
+            echo "::warning::unsigned darwin bundle (PR without signing secrets)"
+          fi
       # Smart App Control (on by default on new Windows 11 installs) refuses unsigned
       # binaries, the wheels' .pyd/.dll included. The interpreter is python.org's
       # (PSF-signed); everything stage listed as unsigned is signed here with our
@@ -159,9 +225,6 @@ jobs:
           }
       - name: Package bundle
         run: ${{ steps.py.outputs.bin }} slim/build_bundle.py --target ${{ matrix.target }} --out dist --work "$RUNNER_TEMP/hs-work" --package-only
-      - name: Standalone zstd for clients without one
-        if: matrix.target == 'linux-x64-musl' || startsWith(matrix.target, 'darwin-')
-        run: sh slim/build_zstd.sh dist
       # A private X display for the smoke test's computer-use step (list_windows + a screenshot through
       # Hermes' computer_use tool layer against the bundled cua-driver). The libs are cua-driver's own.
       - name: Computer-use test display
