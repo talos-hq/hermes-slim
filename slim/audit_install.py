@@ -278,7 +278,8 @@ def main() -> int:
     report.add("bundled", f"native {native} bundle published", any(f"-{native}." in n for n in assets),
                "found" if any(f"-{native}." in n for n in assets) else
                f"no {native} asset in {rel['tag_name']}; the installer uses {target}")
-    asset = next((n for n in assets if re.search(rf"-{re.escape(target)}\.(tar\.zst|zip)$", n)), None)
+    # Prefer the .tar.zst: a Windows release carries a transitional .zip as well (#141).
+    asset = next((n for ext in ("tar.zst", "zip") for n in assets if n.endswith(f"-{target}.{ext}")), None)
     if not asset:
         report.add("bundled", f"{target} bundle published", False, f"none in {rel['tag_name']}")
         return finish(report, args, rel["tag_name"], native, target)

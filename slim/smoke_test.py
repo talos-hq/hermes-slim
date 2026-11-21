@@ -86,13 +86,20 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(tempfile.mkdtemp(prefix="hermes-slim-smoke-"))
+    windows = os.name == "nt"
+    bundle = root / "hermes-slim"
     if args.archive.suffix == ".zip":
         zipfile.ZipFile(args.archive).extractall(root)
+    elif windows:
+        # Windows has no zstd: unpack the way users do, through install.ps1 with the
+        # release's zstd-win32-x64.exe beside the archive and Windows' tar.exe.
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                        str(Path(__file__).resolve().parent / "install.ps1"), "-Archive", str(args.archive),
+                        "-Dir", str(root / "install"), "-NoSetup"], check=True, timeout=1800)
+        bundle = root / "install" / "current"
     else:
         # .tar.zst: GNU tar (with zstd on PATH) and bsdtar both pick the codec from the suffix.
         subprocess.run(["tar", "-xf", args.archive, "-C", root], check=True)
-    bundle = root / "hermes-slim"
-    windows = os.name == "nt"
     py = bundle / "python" / ("python.exe" if windows else "bin/python3")
     setup = bundle / "bin" / ("hermes-slim-setup.cmd" if windows else "hermes-slim-setup")
     hermes = bundle / "bin" / ("hermes.cmd" if windows else "hermes")

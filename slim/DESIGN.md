@@ -32,7 +32,7 @@ dozens of packages at install time — what AV products flag), CI produces one
 self-contained archive per target:
 
 ```
-hermes-slim-<ver>-<target>.{tar.zst|zip}
+hermes-slim-<ver>-<target>.tar.zst   (Windows also ships a transitional .zip, #141)
   python/          relocatable CPython 3.14 (python-build-standalone)
   app/             hermes source at the tagged commit
   site-packages    every dependency pre-installed from uv.lock (+ our wheels)
@@ -140,8 +140,10 @@ host without zstd it starts the standalone decompressor (and its checksum) in th
 before the bundle, so nothing independent queues behind the bundle (#144). Every stage resumes: a range continues from its last byte after a
 dropped connection or a killed run, and a rerun skips a download or unpack already finished
 for the same sha256 (`.bundle-sha256` in the unpacked tree marks it complete). Windows
-extracts with `ZipFile` rather than `Expand-Archive` plus a per-file `Unblock-File` walk:
-201s → 7s for the v0.1.0 bundle on `windows-latest`. Tests: `slim/tests/test_install_download.py`
+unpacks the `.tar.zst` with the release's `zstd-win32-x64.exe` (facebook/zstd's win64 build,
+pinned in `slim/zstd_windows.py` and Authenticode-signed with the bundle) piped through
+`cmd` into System32's `tar.exe` (#141); a release with only a `.zip` still extracts with
+`ZipFile`, never `Expand-Archive` plus a per-file `Unblock-File` walk (201s → 7s for v0.1.0). Tests: `slim/tests/test_install_download.py`
 (install.sh) and `slim/tests/install_ps1_test.ps1` (install.ps1), both against
 `slim/tests/range_server.py`, which can drop each range mid-transfer.
 

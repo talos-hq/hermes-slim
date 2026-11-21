@@ -460,20 +460,28 @@ def package(target: str, out: Path, work: Path, host_work: Path) -> Path:
         {"target": target, "commit": rev, "version": version, "extras": EXTRAS}, indent=2))
     name = f"hermes-slim-{rev}-{target}"
     if windows:
-        archive = out / f"{name}.zip"
-        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        # Transition (#141): installers older than the .tar.zst switch look only for a zip.
+        # Drop this once a release has shipped both.
+        legacy = out / f"{name}.zip"
+        with zipfile.ZipFile(legacy, "w", zipfile.ZIP_DEFLATED) as z:
             for p in bundle.rglob("*"):
                 z.write(p, p.relative_to(work))
-    else:
-        # zstd -9: about as small as xz for this tree and several times faster to unpack.
-        # The host Python may predate compression.zstd (3.14); the bundled one never does.
-        archive = out / f"{name}.tar.zst"
-        run([python, "-c", "import sys, tarfile; t = tarfile.open(sys.argv[1], 'w:zst', level=9); "
-                           "t.add(sys.argv[2], arcname='hermes-slim'); t.close()", archive, bundle])
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    (out / f"{archive.name}.sha256").write_text(f"{digest}  {archive.name}\n")
+        write_sha256(legacy)
+    # zstd -9: about as small as xz for this tree and several times faster to unpack. Every
+    # target ships it; Windows unpacks it with the release's zstd-win32-x64.exe and tar.exe.
+    # The host Python may predate compression.zstd (3.14); the bundled one never does.
+    archive = out / f"{name}.tar.zst"
+    run([python, "-c", "import sys, tarfile; t = tarfile.open(sys.argv[1], 'w:zst', level=9); "
+                       "t.add(sys.argv[2], arcname='hermes-slim'); t.close()", archive, bundle])
+    digest = write_sha256(archive)
     print(f"bundle: {archive} ({archive.stat().st_size // (1 << 20)} MiB) sha256={digest}")
     return archive
+
+
+def write_sha256(archive: Path) -> str:
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.with_name(f"{archive.name}.sha256").write_text(f"{digest}  {archive.name}\n")
+    return digest
 
 
 def main() -> None:

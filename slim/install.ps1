@@ -10,9 +10,11 @@
 # The bundle downloads over -Jobs parallel byte ranges (default 8). Every stage resumes:
 # the download lives in <Dir>\downloads until it is installed, each range continues from
 # where it stopped, and a rerun skips a download or unpack that already finished for the
-# same sha256. -Archive installs a zip from disk or any HTTP(S) mirror (URL.sha256 is
-# checked when present); -Upgrade keeps the configuration and only restarts the gateway;
-# -NoSetup stops after the files and PATH are in place.
+# same sha256. The bundle is a .tar.zst (a .zip for releases before #141), unpacked with
+# the release's standalone zstd-win32-x64.exe and Windows' own tar.exe. -Archive installs
+# a bundle from disk (with zstd-win32-x64.exe beside it) or any HTTP(S) mirror (URL.sha256
+# is checked when present); -Upgrade keeps the configuration and only restarts the
+# gateway; -NoSetup stops after the files and PATH are in place.
 param(
     [string]$Version = "latest",
     [string]$Dir = (Join-Path $env:LOCALAPPDATA "hermes-slim"),
@@ -148,7 +150,57 @@ function Test-Installed([string]$Tree) {
 }
 function Test-NeedBundle { -not (Test-Installed $current) -and -not (Test-Installed (Join-Path $new "hermes-slim")) }
 
+# A .tar.zst bundle unpacks with a standalone zstd.exe piped into Windows' own tar.exe
+# (bsdtar, in System32 since Windows 10 1803). The helper downloads in the background
+# while the bundle's ranges do (#141, #144) and is checked against its sha256 before use.
+$zstdAsset = "zstd-$target.exe"
+$script:helperJob = $null
+function Start-Helper([string]$Base, [string]$Sha256) {
+    if (Get-Command zstd.exe -ErrorAction SilentlyContinue) { return }
+    $dest = Join-Path $downloads $zstdAsset
+    Remove-Item -Force $dest -ErrorAction SilentlyContinue
+    $client = New-Object Net.WebClient
+    $script:helperJob = @{ Client = $client; Task = $client.DownloadFileTaskAsync("$Base/$zstdAsset", $dest)
+                           Path = $dest; Base = $Base; Sha256 = $Sha256 }
+}
+function Get-Helper([string]$ArchivePath) {
+    $onPath = Get-Command zstd.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    $job = $script:helperJob
+    if ($job) {
+        try { $job.Task.Wait() }
+        catch { throw "could not download $zstdAsset from $($job.Base): $($_.Exception.GetBaseException().Message)" }
+        finally { $job.Client.Dispose() }
+        $want = if ($job.Sha256) { $job.Sha256 } else { ((Get-Text "$($job.Base)/$zstdAsset.sha256") -split '\s+')[0] }
+        $path = $job.Path
+    } else {
+        $path = Join-Path (Split-Path $ArchivePath) $zstdAsset
+        if (-not (Test-Path "$path.sha256")) { throw "no zstd here: put $zstdAsset and $zstdAsset.sha256 beside the archive" }
+        $want = ((Get-Content "$path.sha256" -Raw) -split '\s+')[0]
+    }
+    if ((Get-Sha256 $path) -ne $want) { throw "$zstdAsset sha256 mismatch" }
+    $path
+}
+function Expand-Bundle([string]$ArchivePath, [string]$Dest) {
+    if ($ArchivePath.EndsWith(".zip")) {
+        # Releases before the .tar.zst switch (#141) ship only a zip.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $Dest)
+        return
+    }
+    New-Item -ItemType Directory -Force $Dest | Out-Null
+    $zstd = Get-Helper $ArchivePath
+    $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (-not (Test-Path $tar)) { throw "unpacking needs $tar (Windows 10 1803 or newer)" }
+    # cmd pipes raw bytes; a PowerShell pipeline between two native programs re-encodes them
+    # as text. Start-Process hands cmd this command line verbatim (/s: strip only the outer quotes).
+    $line = "/s /c `"`"$zstd`" -dcq `"$ArchivePath`" | `"$tar`" -xf - -C `"$Dest`"`""
+    $proc = Start-Process cmd.exe -ArgumentList $line -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode) { throw "unpacking $ArchivePath failed (exit $($proc.ExitCode))" }
+}
+
 if ($Archive -match '^https?://') {
+    if ($Archive.EndsWith(".tar.zst")) { Start-Helper ($Archive -replace '/[^/]*$', '') "" }
     try { $expected = ((Get-Text "$Archive.sha256") -split '\s+')[0] } catch { }
     $local = Join-Path $downloads ($Archive -split '/')[-1]
     if (-not $expected -or (Test-NeedBundle)) { Receive-File $Archive $local $expected }
@@ -170,10 +222,13 @@ if ($Archive -match '^https?://') {
         $lines = $manifest -split "`r?`n"
         $tagLine = $lines | Where-Object { $_ -match '^release (\S+)$' } | Select-Object -First 1
         if ($tagLine -match '^release (\S+)$') { $Version = $Matches[1] }
-        $entry = $lines | Where-Object { $_ -match "^bundle $target (hermes-slim-\S+\.zip) ([0-9a-f]{64}) " } | Select-Object -First 1
+        $entry = @($lines | Where-Object { $_ -match "^bundle $target hermes-slim-\S+\.tar\.zst [0-9a-f]{64} " }) +
+                 @($lines | Where-Object { $_ -match "^bundle $target hermes-slim-\S+\.zip [0-9a-f]{64} " }) | Select-Object -First 1
         if (-not $entry) { throw "no $target bundle in release $Version" }
         $null = $entry -match "^bundle $target (\S+) (\S+) "
         $name = $Matches[1]; $expected = $Matches[2]
+        $helperLine = $lines | Where-Object { $_ -match "^zstd $target $([regex]::Escape($zstdAsset)) ([0-9a-f]{64}) " } | Select-Object -First 1
+        $helperSha = if ($helperLine -match " ([0-9a-f]{64}) ") { $Matches[1] } else { "" }
     } else {
         # Releases from before the manifest: look the asset up through the API.
         $api = if ($Version -eq "latest") { "https://api.github.com/repos/$repo/releases/latest" } else { "https://api.github.com/repos/$repo/releases/tags/$Version" }
@@ -184,12 +239,15 @@ if ($Archive -match '^https?://') {
             throw
         }
         $Version = $release.tag_name
-        $asset = $release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.zip" } | Select-Object -First 1
+        $asset = @($release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.tar.zst" }) +
+                 @($release.assets | Where-Object { $_.name -like "hermes-slim-*-$target.zip" }) | Select-Object -First 1
+        $helperSha = ""
         if (-not $asset) { throw "no $target bundle in release $Version" }
         $name = $asset.name
         $expected = ((Get-Text "https://github.com/$repo/releases/download/$Version/$name.sha256") -split '\s+')[0]
     }
     $Archive = Join-Path $downloads $name
+    if ($name.EndsWith(".tar.zst") -and (Test-NeedBundle)) { Start-Helper "https://github.com/$repo/releases/download/$Version" $helperSha }
     if (Test-NeedBundle) { Receive-File "https://github.com/$repo/releases/download/$Version/$name" $Archive $expected }
 }
 
@@ -201,11 +259,10 @@ if (Test-Installed $current) {
     } else {
         Write-Host "-> installing to $Dir"
         Remove-Item -Recurse -Force $new -ErrorAction SilentlyContinue
-        # A browser-downloaded -Archive carries the internet zone mark; clear it on the zip so
-        # extraction is not slowed or blocked by it. ZipFile writes the tree without marks.
+        # A browser-downloaded -Archive carries the internet zone mark; clear it so extraction
+        # is not slowed or blocked by it. Neither unpacker copies the mark onto the tree.
         Unblock-File $Archive
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $new)
+        Expand-Bundle $Archive $new
         if ($expected) { Set-Content (Join-Path $new "hermes-slim\.bundle-sha256") $expected }
     }
     Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue
@@ -217,8 +274,9 @@ if (Test-Installed $current) {
     Move-Item (Join-Path $new "hermes-slim") $current
     Remove-Item -Recurse -Force $new
 }
-# The cached download has served its purpose once its tree is in place.
+# The cached download (and the helper that unpacked it) has served its purpose.
 if ($Archive.StartsWith($downloads)) { Remove-Item -Force $Archive -ErrorAction SilentlyContinue }
+Remove-Item -Force (Join-Path $downloads $zstdAsset) -ErrorAction SilentlyContinue
 
 $bin = Join-Path $current "bin"
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
