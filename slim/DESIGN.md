@@ -131,7 +131,11 @@ Upstream's own workflows are disabled in this fork via the Actions API
 - Windows: `slim/install.ps1` — same, into `%LOCALAPPDATA%\\hermes-slim`, adds `bin` to the user PATH.
 
 Both fetch the bundle over 8 parallel HTTP byte ranges (`--jobs` / `-Jobs`) into
-`<dir>/downloads`. install.sh reads the tag and asset names from one releases API call, and on a
+`<dir>/downloads`. Both resolve the release from `hermes-slim-manifest.txt` (`release TAG`, then
+`KIND TARGET NAME SHA256 SIZE` per asset; written by `slim/release_manifest.py` in the release
+job), which the release CDN serves without api.github.com's 60-calls-per-hour-per-IP limit; a
+release without one falls back to a single API call, and a 403 there is reported as a rate
+limit (#146). Every download then pins to the manifest's tag. On a
 host without zstd it starts the standalone decompressor (and its checksum) in the background
 before the bundle, so nothing independent queues behind the bundle (#144). Every stage resumes: a range continues from its last byte after a
 dropped connection or a killed run, and a rerun skips a download or unpack already finished
