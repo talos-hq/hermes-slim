@@ -181,12 +181,13 @@ timestamps and closes files on a pool of writers so the per-file scans overlap. 
 made only after every file is written (no write can follow one out of the install), `..`
 and absolute paths are refused, and modes and PAX mtimes are kept to the nanosecond (Python
 checks a `.pyc` against its source's mtime; tarfile's rounded header value is a second
-off). The release ships it for macOS and Windows (native on ARM64, signed with the bundle) as
+off). The release ships it for macOS, Windows (native on ARM64, signed with the bundle) and Linux
+(static musl binaries: linux-x64 serves the glibc and Alpine bundles alike) as
 `unpack TARGET NAME SHA256 SIZE` in the manifest. The installers fetch it alongside the
 bundle, pinned to that sha256, in place of the zstd helper; a mirror or a local archive may
 have it beside the bundle. A checksum mismatch stops the install; a missing unpacker, or one
 that fails to unpack, falls back to `zstd | tar`. The bundle job prints both timings on each
-macOS and Windows runner (`slim/bench_unpack.py`). Windows
+runner (`slim/bench_unpack.py`). Windows
 unpacks the `.tar.zst` with the release's `zstd-win32-x64.exe` (facebook/zstd's win64 build,
 pinned in `slim/zstd_windows.py` and Authenticode-signed with the bundle) piped through
 `cmd` into System32's `tar.exe` (#141); a release with only a `.zip` still extracts with

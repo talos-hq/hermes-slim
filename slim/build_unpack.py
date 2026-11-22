@@ -7,6 +7,9 @@ Writes OUT_DIR/hermes-slim-unpack-TARGET (.exe on Windows) and its .sha256. CI s
 with the bundle (Developer ID + notarization on macOS, Authenticode on Windows) and records
 the .sha256 again, so the checksum the installers check describes the signed bytes. macOS builds
 target macOS 11 like slim/build_zstd.sh, so the helper runs on every Mac the bundle does.
+Linux builds are static musl binaries (linux-x64 serves the glibc and musl bundles alike),
+both built on an x86_64 host: soldr's musl toolchain runs only there. The arm64 one is
+checked under qemu-user (qemu-aarch64).
 """
 
 from __future__ import annotations
@@ -26,6 +29,9 @@ TRIPLES = {
     "darwin-x64": "x86_64-apple-darwin",
     "win32-x64": "x86_64-pc-windows-msvc",
     "win32-arm64": "aarch64-pc-windows-msvc",
+    # Static musl: one binary per arch runs on glibc and musl (Alpine) distributions alike.
+    "linux-x64": "x86_64-unknown-linux-musl",
+    "linux-arm64": "aarch64-unknown-linux-musl",
 }
 MACOS_MIN = "11.0"
 
@@ -46,7 +52,9 @@ def main() -> int:
     target, out = sys.argv[1], Path(sys.argv[2])
     triple = TRIPLES[target]
     env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET=MACOS_MIN)
-    # From the crate directory, so soldr picks up its rust-toolchain.toml.
+    # From the crate directory, so soldr picks up its rust-toolchain.toml. The musl targets
+    # are not the runner's host: their standard library has to be added to the toolchain.
+    subprocess.run(["soldr", "rustup", "target", "add", triple], cwd=CRATE, env=env, check=True, timeout=600)
     subprocess.run(["soldr", "cargo", "build", "--release", "--locked", "--target", triple],
                    cwd=CRATE, env=env, check=True, timeout=3600)
     built = CRATE / "target" / triple / "release" / ("hermes-slim-unpack" + (".exe" if target.startswith("win32-") else ""))
@@ -54,7 +62,13 @@ def main() -> int:
     dest = out / asset_name(target)
     shutil.copyfile(built, dest)
     dest.chmod(0o755)
-    print(subprocess.run([str(dest), "--version"], capture_output=True, text=True, check=True, timeout=60).stdout.strip())
+    # A cross-built Linux arm64 binary runs under qemu-user on an x86_64 host.
+    runner = ["qemu-aarch64"] if target == "linux-arm64" and platform.machine() not in ("aarch64", "arm64") else []
+    print(subprocess.run([*runner, str(dest), "--version"], capture_output=True, text=True, check=True, timeout=60).stdout.strip())
+    if target.startswith("linux-"):
+        linked = subprocess.run(["file", "-L", str(dest)], capture_output=True, text=True, check=True, timeout=60).stdout
+        if "statically linked" not in linked and "static-pie linked" not in linked:
+            raise SystemExit(f"{dest.name} is not static: {linked.strip()}")
     if target.startswith("darwin-"):
         minos = macos_minimum(dest)
         if minos != MACOS_MIN:

@@ -265,8 +265,27 @@ function Start-Fetch([string]$Asset, [string]$Base, [string]$Sha256) {
     $dest = Join-Path $downloads $Asset
     Remove-Item -Force $dest -ErrorAction SilentlyContinue
     $client = New-Object Net.WebClient
-    @{ Client = $client; Task = $client.DownloadFileTaskAsync("$Base/$Asset", $dest)
-       Asset = $Asset; Path = $dest; Base = $Base; Sha256 = $Sha256 }
+    $job = @{ Client = $client; Task = $client.DownloadFileTaskAsync("$Base/$Asset", $dest)
+              Asset = $Asset; Path = $dest; Base = $Base; Sha256 = $Sha256; ShaClient = $null; ShaTask = $null }
+    if (-not $Sha256) {
+        # Unpinned (a mirror): its checksum downloads alongside it, not after the bundle.
+        $job.ShaClient = New-Object Net.WebClient
+        $job.ShaTask = $job.ShaClient.DownloadStringTaskAsync("$Base/$Asset.sha256")
+    }
+    $job
+}
+# Asset.sha256 for an unpinned job: from its background download, or fetched again (with
+# retries) if that failed for any reason but a 404. $null when the server has none.
+function Get-FetchSha($Job) {
+    if ($Job.ShaTask) {
+        try {
+            if ($Job.ShaTask.Wait(120000)) { $text = $Job.ShaTask.Result; $Job.ShaClient.Dispose(); return $text }
+        } catch {
+            $Job.ShaClient.Dispose()
+            if ((Get-Status $_) -in 404, 410) { return $null }
+        }
+    }
+    Get-Text "$($Job.Base)/$($Job.Asset).sha256"
 }
 # The verified file a Start-Fetch job downloaded. $null when the server has no such file, or
 # (-Optional) publishes no checksum for it; a checksum mismatch always throws.
@@ -285,7 +304,7 @@ function Complete-Fetch($Job, [switch]$Optional) {
     }
     $want = $Job.Sha256
     if (-not $want) {
-        $text = Get-Text "$($Job.Base)/$($Job.Asset).sha256"
+        $text = Get-FetchSha $Job
         if (-not $text) {
             if ($Optional) { return $null }
             throw "no $($Job.Asset).sha256 at $($Job.Base)"
