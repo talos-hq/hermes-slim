@@ -156,13 +156,28 @@ limit (#146). Every download then pins to the manifest's tag. On a
 host without zstd it starts the standalone decompressor (and its checksum) in the background
 before the bundle, so nothing independent queues behind the bundle (#144). Every stage resumes: a range continues from its last byte after a
 dropped connection or a killed run, and a rerun skips a download or unpack already finished
-for the same sha256 (`.bundle-sha256` in the unpacked tree marks it complete). Windows
+for the same sha256 (`.bundle-sha256` in the unpacked tree marks it complete).
+
+A bad connection is the case both installers are built for. Every transfer abandons a link
+that is silent for 20 s (curl's `--speed-limit 1024 --speed-time 20`; a per-read deadline in
+install.ps1), since a dead Wi-Fi link or a wedged proxy holds the socket open forever and
+resuming loses nothing. A range attempt joins its part only when the server answered 206 with
+a `Content-Range` starting at exactly the byte asked for, so an error page, a stale range or
+a proxy's whole-file 200 never lands in the file; a whole-file 200 switches to one resumable
+stream. Rounds that gain bytes retry at once, rounds that gain none back off (1, 2, 4, 8, 16,
+then 30 s), and about two minutes without a byte stops with "rerun to resume". Small files
+(manifest, checksum, helper) retry the same way, and only a 404/410 means "absent": a mirror
+may publish no checksum, but a checksum it failed to serve stops the install rather than
+installing unverified. Windows
 unpacks the `.tar.zst` with the release's `zstd-win32-x64.exe` (facebook/zstd's win64 build,
 pinned in `slim/zstd_windows.py` and Authenticode-signed with the bundle) piped through
 `cmd` into System32's `tar.exe` (#141); a release with only a `.zip` still extracts with
 `ZipFile`, never `Expand-Archive` plus a per-file `Unblock-File` walk (201s → 7s for v0.1.0). Tests: `slim/tests/test_install_download.py`
 (install.sh) and `slim/tests/install_ps1_test.ps1` (install.ps1), both against
-`slim/tests/range_server.py`, which can drop each range mid-transfer.
+`slim/tests/range_server.py`, which breaks the connection the ways a bad network does: drops
+each range mid-transfer, stalls it on a silent socket, goes down for seconds, answers a small
+file with a 503, or ignores ranges like some proxies. The audit's Windows legs run the
+install.ps1 driver under Windows PowerShell 5.1.
 
 ## Signed binaries (Windows Smart App Control)
 Smart App Control, on by default on fresh Windows 11 installs, refuses to run or load

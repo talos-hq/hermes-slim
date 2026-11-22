@@ -22,7 +22,9 @@
 #
 # Every stage resumes: the download lives in <dir>/downloads until it is installed,
 # each byte range continues from where it stopped, and a rerun skips a download or
-# unpack that already finished for the same sha256.
+# unpack that already finished for the same sha256. A bad connection (drops, stalls,
+# outages, flaky small files, proxies that ignore ranges) is retried with backoff and
+# never turns checksum verification off (slim/DESIGN.md, "Install entry points").
 set -eu
 
 repo="talos-hq/hermes-slim"
@@ -77,49 +79,142 @@ esac
 sha256() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -d' ' -f1; }
 size_of() { if [ -f "$1" ]; then wc -c <"$1" | tr -d ' '; else echo 0; fi; }
 
-# Total size when the server honours byte ranges (GitHub's release CDN does), else empty.
-range_size() {
-  curl -fsSL -r 0-0 -D - -o /dev/null "$1" 2>/dev/null | tr -d '\r' |
-    sed -n 's#^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Rr][Aa][Nn][Gg][Ee]: *bytes 0-0/\([0-9][0-9]*\)$#\1#p' | tail -1
+# A bad connection is the normal case this has to survive. Every transfer gives up on a link
+# that moves under 1 KiB/s for 20 s (a dead Wi-Fi link or a wedged proxy holds the socket
+# open and silent, and curl would otherwise wait on it forever); since every fetch resumes,
+# abandoning one loses nothing.
+curl_net="--connect-timeout 20 --speed-limit 1024 --speed-time 20"
+
+# Sleep before retry N of a fetch that is getting nowhere: 1, 2, 4, 8, 16, then 30 s, so a
+# network that is down for a minute is waited out instead of burning every retry inside it.
+backoff() {
+  _b=1 _n="$1"
+  while [ "$_n" -gt 1 ] && [ "$_b" -lt 30 ]; do _b=$((_b * 2)); _n=$((_n - 1)); done
+  [ "$_b" -le 30 ] || _b=30
+  sleep "$_b"
 }
 
-# Fetch byte ranges of $1 into $2.parts/<i> concurrently. A part that stopped early (network
-# drop, Ctrl-C, reboot) continues from its last byte on the next round or the next run.
+# get URL OUT: fetch a small file (checksum, manifest, helper) through a bad connection.
+# 0 = fetched; 2 = the server answered that it does not exist (404/410), which callers may
+# accept, unlike 1 = unreachable after ~1.5 minutes of retries. A 503 is never "absent": a
+# missing checksum must not be how a flaky network turns verification off.
+get() {
+  _t=0
+  while :; do
+    _c="$(curl -fsSL $curl_net -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || true
+    case "$_c" in
+      2??) return 0 ;;
+      404|410) rm -f "$2"; return 2 ;;
+      408|429) ;;
+      4??) rm -f "$2"; return 1 ;;
+    esac
+    rm -f "$2"
+    _t=$((_t + 1))
+    [ "$_t" -lt 8 ] || return 1
+    backoff "$_t"
+  done
+}
+
+# Total size when the server honours byte ranges (GitHub's release CDN does), else empty.
+range_size() {
+  _t=0
+  while :; do
+    _c="$(curl -sSL $curl_net -r 0-0 -D "$tmp/probe.hdr" -o /dev/null -w '%{http_code}' "$1" 2>/dev/null)" || true
+    case "$_c" in
+      206) tr -d '\r' <"$tmp/probe.hdr" |
+             sed -n 's#^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Rr][Aa][Nn][Gg][Ee]: *bytes 0-0/\([0-9][0-9]*\)$#\1#p' | tail -1
+           return 0 ;;
+      [2-4]??) return 0 ;;  # no ranges here; the one-stream download reports any error
+    esac
+    _t=$((_t + 1))
+    [ "$_t" -lt 4 ] || return 0
+    backoff "$_t"
+  done
+}
+
+# Bytes on disk across a download's pieces (finished bytes plus the attempt in flight).
+progress() {
+  [ -t 2 ] || return 0
+  printf '\r  %3d%%  %d / %d MiB' $(($1 * 100 / $2)) $(($1 >> 20)) $(($2 >> 20)) >&2
+}
+
+# Called after each round of a download: stop after ~2 minutes in which no byte arrived
+# (a rerun resumes), wait before the next round while there is no progress, and retry at
+# once while bytes keep coming.
+no_progress() {
+  if [ "$1" -gt "$last" ]; then idle=0 last="$1"; return 0; fi
+  idle=$((idle + 1))
+  if [ "$idle" -gt 7 ]; then
+    [ ! -t 2 ] || printf '\n' >&2
+    echo "hermes-slim: no download progress for about two minutes ($2); check the connection and rerun to resume" >&2
+    exit 1
+  fi
+  backoff "$idle"
+}
+
+# Fetch byte ranges of $1 into $2.parts/<i> concurrently. Each attempt lands in <i>.got and
+# joins <i> only when the server answered 206 for exactly the bytes asked, so an error page,
+# a stale range or a proxy's whole-file 200 never lands in a part. A part that stopped early
+# (dropped, stalled, Ctrl-C, reboot) continues from its last good byte on the next round or
+# the next run. Returns 3 when the server sends whole files instead of ranges.
 fetch_ranges() {
   url="$1" out="$2" size="$3"
   parts="$out.parts"
   [ "$(cat "$parts/size" 2>/dev/null)" = "$size" ] || { rm -rf "$parts"; mkdir -p "$parts"; echo "$size" >"$parts/size"; }
   chunk=$(( (size + jobs - 1) / jobs ))
-  round=0
+  idle=0 last=-1
   while :; do
-    pids="" missing=0 i=0
+    missing=0 got=0 i=0
+    while [ $((i * chunk)) -lt "$size" ]; do
+      part_len=$(( i * chunk + chunk > size ? size - i * chunk : chunk )) have="$(size_of "$parts/$i")"
+      [ "$have" -le "$part_len" ] || { : >"$parts/$i"; have=0; }
+      got=$((got + have))
+      [ "$have" -eq "$part_len" ] || missing=$((missing + 1))
+      i=$((i + 1))
+    done
+    [ "$missing" -gt 0 ] || break
+    no_progress "$got" "$url"
+    pids="" i=0
     while [ $((i * chunk)) -lt "$size" ]; do
       start=$((i * chunk)) end=$((i * chunk + chunk - 1))
       [ "$end" -lt "$size" ] || end=$((size - 1))
-      part_len=$((end - start + 1)) have="$(size_of "$parts/$i")"
-      [ "$have" -le "$part_len" ] || { : >"$parts/$i"; have=0; }
-      if [ "$have" -lt "$part_len" ]; then
-        missing=$((missing + 1))
-        curl -fsSL --connect-timeout 20 -r "$((start + have))-$end" "$url" >>"$parts/$i" 2>/dev/null &
+      have="$(size_of "$parts/$i")"
+      if [ "$have" -lt $((end - start + 1)) ]; then
+        rm -f "$parts/$i.got" "$parts/$i.hdr"
+        curl -sSL $curl_net -r "$((start + have))-$end" -D "$parts/$i.hdr" -o "$parts/$i.got" \
+          -w '%{http_code}' "$url" >"$parts/$i.code" 2>/dev/null &
         pids="$pids $!"
       fi
       i=$((i + 1))
     done
-    [ "$missing" -gt 0 ] || break
-    [ "$round" -lt 5 ] || { echo "hermes-slim: download of $url keeps failing; rerun to resume it" >&2; exit 1; }
-    round=$((round + 1))
     while :; do
       alive=0
       for p in $pids; do kill -0 "$p" 2>/dev/null && alive=1; done
       if [ -t 2 ]; then
-        got=0
-        for f in "$parts"/[0-9]*; do got=$((got + $(size_of "$f"))); done
-        printf '\r  %3d%%  %d / %d MiB' $((got * 100 / size)) $((got >> 20)) $((size >> 20)) >&2
+        now=$got i=0
+        while [ $((i * chunk)) -lt "$size" ]; do now=$((now + $(size_of "$parts/$i.got"))); i=$((i + 1)); done
+        progress "$now" "$size"
       fi
       [ "$alive" = 1 ] || break
       sleep 1
     done
     wait || true
+    pids=""
+    whole=false i=0
+    while [ $((i * chunk)) -lt "$size" ]; do
+      if [ -f "$parts/$i.code" ]; then
+        start=$((i * chunk + $(size_of "$parts/$i")))
+        case "$(cat "$parts/$i.code")" in
+          206) if tr -d '\r' <"$parts/$i.hdr" | grep -qi "^content-range: *bytes $start-[0-9]*/$size\$"; then
+                 cat "$parts/$i.got" >>"$parts/$i"
+               fi ;;
+          200) whole=true ;;
+        esac
+        rm -f "$parts/$i.got" "$parts/$i.hdr" "$parts/$i.code"
+      fi
+      i=$((i + 1))
+    done
+    if [ "$whole" = true ]; then rm -rf "$parts"; return 3; fi
   done
   [ ! -t 2 ] || printf '\n' >&2
   i=0
@@ -127,6 +222,23 @@ fetch_ranges() {
   while [ $((i * chunk)) -lt "$size" ]; do cat "$parts/$i" >>"$out.tmp"; i=$((i + 1)); done
   mv "$out.tmp" "$out"
   rm -rf "$parts"
+}
+
+# One stream into $2.part, resumed (-C -) from its last byte after every drop or stall.
+fetch_stream() {
+  url="$1" out="$2" idle=0 last=-1
+  if [ -t 2 ]; then show="-#"; else show="-s"; fi
+  while :; do
+    rc=0
+    code="$(curl -fSL $show $curl_net -C - -o "$out.part" -w '%{http_code}' "$url")" || rc=$?
+    if [ "$rc" = 0 ]; then mv "$out.part" "$out"; return 0; fi
+    case "$code" in
+      401|403|404|410) echo "hermes-slim: $url answered HTTP $code" >&2; exit 1 ;;
+    esac
+    # 33: the server cannot resume, so start this file over.
+    [ "$rc" != 33 ] || rm -f "$out.part"
+    no_progress "$(size_of "$out.part")" "$url"
+  done
 }
 
 # fetch URL OUT [SHA256]: skip when OUT already has SHA256, otherwise download it (in parallel
@@ -141,11 +253,13 @@ fetch() {
   size="$(range_size "$url")"
   if [ "$jobs" -gt 1 ] && [ -n "$size" ] && [ "$size" -ge 8388608 ]; then
     echo "→ downloading $(basename "$out") ($((size >> 20)) MiB, $jobs connections)"
-    fetch_ranges "$url" "$out" "$size"
+    if ! fetch_ranges "$url" "$out" "$size"; then
+      echo "→ the server sends whole files, not byte ranges; downloading as one stream"
+      fetch_stream "$url" "$out"
+    fi
   else
     echo "→ downloading $(basename "$out")"
-    curl -fSL --retry 3 -C - --progress-bar -o "$out.part" "$url"
-    mv "$out.part" "$out"
+    fetch_stream "$url" "$out"
   fi
   if [ -n "$want" ] && [ "$(sha256 "$out")" != "$want" ]; then
     rm -f "$out"
@@ -168,9 +282,9 @@ helper_pids=""
 start_helper() {
   if [ -z "$base" ] || [ -z "$zstd_asset" ] || command -v zstd >/dev/null 2>&1; then return 0; fi
   echo "→ no zstd here; fetching a standalone decompressor alongside the bundle"
-  curl -fsSL --retry 3 -o "$tmp/zstd" "$base/$zstd_asset" 2>/dev/null &
+  get "$base/$zstd_asset" "$tmp/zstd" &
   helper_pids="$!"
-  curl -fsSL --retry 3 -o "$tmp/zstd.sha256" "$base/$zstd_asset.sha256" 2>/dev/null &
+  get "$base/$zstd_asset.sha256" "$tmp/zstd.sha256" &
   helper_pids="$helper_pids $!"
 }
 unpack() {
@@ -182,8 +296,8 @@ unpack() {
       for p in $helper_pids; do wait "$p" 2>/dev/null || true; done
       if [ ! -s "$tmp/zstd" ] || [ ! -s "$tmp/zstd.sha256" ]; then
         echo "→ fetching the standalone decompressor"
-        curl -fsSL --retry 3 -o "$tmp/zstd" "$base/$zstd_asset"
-        curl -fsSL --retry 3 -o "$tmp/zstd.sha256" "$base/$zstd_asset.sha256"
+        { get "$base/$zstd_asset" "$tmp/zstd" && get "$base/$zstd_asset.sha256" "$tmp/zstd.sha256"; } ||
+          { echo "hermes-slim: could not download $zstd_asset from $base" >&2; exit 1; }
       fi
     else
       cp "$(dirname "$1")/$zstd_asset" "$tmp/zstd" 2>/dev/null &&
@@ -208,7 +322,10 @@ installed() { [ -n "$expected" ] && [ "$(cat "$1/.bundle-sha256" 2>/dev/null)" =
 need_bundle() { ! installed "$dir/current" && ! installed "$dir/hermes-slim.new"; }
 
 tmp="$(mktemp -d)"
+pids=""
 trap 'rm -rf "$tmp"' EXIT
+# Ctrl-C stops the background range and helper transfers too; their bytes stay for a rerun.
+trap 'for p in $pids $helper_pids; do kill "$p" 2>/dev/null; done; exit 130' INT TERM
 mkdir -p "$dir/downloads"
 base=""
 expected=""
@@ -216,7 +333,14 @@ case "$archive" in
   http://*|https://*)
     base="${archive%/*}"
     start_helper
-    curl -fsSL -o "$tmp/archive.sha256" "$archive.sha256" 2>/dev/null && expected="$(cut -d' ' -f1 "$tmp/archive.sha256")"
+    # A mirror may publish no checksum (404), but one it failed to serve is an error.
+    rc=0
+    get "$archive.sha256" "$tmp/archive.sha256" || rc=$?
+    case "$rc" in
+      0) expected="$(cut -d' ' -f1 "$tmp/archive.sha256")" ;;
+      2) echo "→ no $archive.sha256 on this mirror; installing unverified" ;;
+      *) echo "hermes-slim: could not download $archive.sha256; check the connection and rerun" >&2; exit 1 ;;
+    esac
     if [ -z "$expected" ] || need_bundle; then fetch "$archive" "$dir/downloads/${archive##*/}" "$expected"; fi
     archive="$dir/downloads/${archive##*/}" ;;
   ?*)
@@ -231,7 +355,7 @@ case "$archive" in
     # a shared network (#146). It names the tag, so every download pins to one release.
     if [ "$version" = latest ]; then manifest_base="https://github.com/$repo/releases/latest/download"
     else manifest_base="https://github.com/$repo/releases/download/$version"; fi
-    if curl -fsSL --retry 3 -o "$tmp/manifest" "$manifest_base/hermes-slim-manifest.txt" 2>/dev/null; then
+    if get "$manifest_base/hermes-slim-manifest.txt" "$tmp/manifest"; then
       tag="$(sed -n 's/^release \([^ ]*\)$/\1/p' "$tmp/manifest" | head -1)"
       [ -z "$tag" ] || version="$tag"
       line="$(grep "^bundle $target hermes-slim-[^ ]*\.tar\.zst " "$tmp/manifest" | head -1)"
@@ -258,7 +382,8 @@ case "$archive" in
     base="https://github.com/$repo/releases/download/$version"
     start_helper
     if [ -z "$expected" ]; then
-      curl -fsSL -o "$tmp/$asset.sha256" "$base/$asset.sha256"
+      get "$base/$asset.sha256" "$tmp/$asset.sha256" ||
+        { echo "hermes-slim: could not download $asset.sha256; check the connection and rerun" >&2; exit 1; }
       expected="$(cut -d' ' -f1 "$tmp/$asset.sha256")"
     fi
     if need_bundle; then fetch "$base/$asset" "$dir/downloads/$asset" "$expected"; fi

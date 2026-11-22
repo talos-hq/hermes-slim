@@ -62,14 +62,20 @@ class ManifestTests(unittest.TestCase):
             "if 'api.github.com' in url:\n"
             "    sys.stderr.write('curl: (22) The requested URL returned error: 403\\n')\n"
             "    sys.exit(22)\n"
+            # Like curl's -w: the installer tells "absent" from "unreachable" by status.
+            "def status(code):\n"
+            "    if '-w' in args:\n"
+            "        sys.stdout.write(args[args.index('-w') + 1].replace('%{http_code}', code))\n"
             f"src = Path({str(self.release)!r}) / url.rsplit('/', 1)[-1]\n"
             "if not src.exists():\n"
+            "    status('404')\n"
             "    sys.stderr.write('curl: (22) The requested URL returned error: 404\\n')\n"
             "    sys.exit(22)\n"
             "if '-o' in args:\n"
             "    shutil.copyfile(src, args[args.index('-o') + 1])\n"
             "else:\n"
             "    sys.stdout.buffer.write(src.read_bytes())\n"
+            "status('200')\n"
         )
         for name in ("zstd", "curl"):
             (commands / name).chmod(0o755)

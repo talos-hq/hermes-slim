@@ -109,7 +109,16 @@ class StandaloneZstdTests(unittest.TestCase):
                     "if '/releases/tags/' in url:\n"
                     f"    print(json.dumps({{'assets': [{{'name': {asset!r}}}]}}))\n"
                     "else:\n"
-                    f"    shutil.copyfile(Path({str(release)!r}) / url.rsplit('/', 1)[-1], args[args.index('-o') + 1])\n"
+                    f"    src = Path({str(release)!r}) / url.rsplit('/', 1)[-1]\n"
+                    # Like a server and curl's -w: a missing file is a 404 the installer can tell
+                    # from an unreachable one.
+                    "    code = '200' if src.exists() else '404'\n"
+                    "    if src.exists():\n"
+                    "        shutil.copyfile(src, args[args.index('-o') + 1])\n"
+                    "    if '-w' in args:\n"
+                    "        sys.stdout.write(args[args.index('-w') + 1].replace('%{http_code}', code))\n"
+                    "    if code != '200':\n"
+                    "        sys.exit(22)\n"
                 )
                 curl.chmod(0o755)
                 env = dict(os.environ, HOME=str(home), PATH=f"{commands}:{os.environ['PATH']}")
