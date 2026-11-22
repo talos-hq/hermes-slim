@@ -9,6 +9,7 @@ A `release TAG` line, then one line per downloadable asset, `KIND TARGET NAME SH
     bundle darwin-arm64 hermes-slim-<commit>-darwin-arm64.tar.zst <sha256> <bytes>
     zstd darwin-arm64 zstd-darwin-arm64 <sha256> <bytes>
     unpack darwin-arm64 hermes-slim-unpack-darwin-arm64 <sha256> <bytes>
+    frames darwin-arm64 hermes-slim-<commit>-darwin-arm64.tar.zst.frames <sha256> <bytes>
 
 The installers read it from `releases/latest/download/hermes-slim-manifest.txt`. That
 URL is served by GitHub's release CDN, so unlike api.github.com (60 unauthenticated
@@ -30,6 +31,8 @@ from pathlib import Path
 MANIFEST = "hermes-slim-manifest.txt"
 BUNDLE = re.compile(r"^hermes-slim-[0-9a-zA-Z.]+-(?P<target>[a-z0-9]+-[a-z0-9-]+?)\.(?:tar\.zst|zip)$")
 ZSTD = re.compile(r"^zstd-(?P<target>[a-z0-9]+-[a-z0-9-]+?)(?:\.exe)?$")
+# The bundle's frame index (slim/zstd_frames.py); pinning it here pins every frame's sha256.
+FRAMES = re.compile(r"^hermes-slim-[0-9a-zA-Z.]+-(?P<target>[a-z0-9]+-[a-z0-9-]+?)\.tar\.zst\.frames$")
 UNPACK = re.compile(r"^hermes-slim-unpack-(?P<target>[a-z0-9]+-[a-z0-9-]+?)(?:\.exe)?$")
 
 
@@ -46,7 +49,7 @@ def entries(dist: Path) -> list[tuple[str, str, str, str, int]]:
     for path in sorted(dist.iterdir()):
         if not path.is_file():
             continue
-        for kind, pattern in (("bundle", BUNDLE), ("zstd", ZSTD), ("unpack", UNPACK)):
+        for kind, pattern in (("bundle", BUNDLE), ("zstd", ZSTD), ("unpack", UNPACK), ("frames", FRAMES)):
             m = pattern.match(path.name)
             if not m:
                 continue

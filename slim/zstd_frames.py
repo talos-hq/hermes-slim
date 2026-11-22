@@ -14,11 +14,22 @@ and decodes the frames on every core at once.
 with an empty window) and leave ~90 frames for a ~730 MiB bundle: enough to keep every
 core busy. Frames compress in parallel here too. Needs Python 3.14 (compression.zstd);
 build_bundle.py runs it with the bundled interpreter.
+
+Beside DST it writes DST.frames, the index hermes-slim-unpack --url streams by: the archive's
+size and sha256, every frame's compressed size, decompressed size and sha256, then the seek
+table's length and sha256. Each frame is checked against it as soon as it has downloaded,
+so frames decode and unpack while later ones are still arriving.
+
+    hermes-slim-frames 1
+    archive SIZE SHA256
+    frame COMPRESSED DECOMPRESSED SHA256      (one per frame, in order from offset 0)
+    tail LENGTH SHA256
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,6 +44,25 @@ def seek_table(sizes: list[tuple[int, int]]) -> bytes:
     entries = b"".join(struct.pack("<II", c, d) for c, d in sizes)
     footer = struct.pack("<IBI", len(sizes), 0, SEEKABLE_MAGIC)
     return struct.pack("<II", SKIPPABLE_MAGIC, len(entries) + len(footer)) + entries + footer
+
+
+def frame_index(archive: Path) -> str:
+    """DST.frames for a seekable archive, read back from its own seek table."""
+    data = archive.read_bytes()
+    count, descriptor, magic = struct.unpack("<IBI", data[-9:])
+    if magic != SEEKABLE_MAGIC:
+        raise ValueError(f"{archive} has no seek table")
+    entry = 12 if descriptor & 0x80 else 8
+    table = data[-9 - count * entry:-9]
+    lines = ["hermes-slim-frames 1", f"archive {len(data)} {hashlib.sha256(data).hexdigest()}"]
+    offset = 0
+    for i in range(count):
+        compressed, decompressed = struct.unpack_from("<II", table, i * entry)
+        lines.append(f"frame {compressed} {decompressed} {hashlib.sha256(data[offset:offset + compressed]).hexdigest()}")
+        offset += compressed
+    tail = data[offset:]
+    lines.append(f"tail {len(tail)} {hashlib.sha256(tail).hexdigest()}")
+    return "\n".join(lines) + "\n"
 
 
 def compress(src: Path, dst: Path, level: int = 9, frame: int = 8 << 20, workers: int | None = None) -> int:
@@ -57,6 +87,7 @@ def compress(src: Path, dst: Path, level: int = 9, frame: int = 8 << 20, workers
                 out.write(packed)
                 sizes.append((len(packed), raw))
         out.write(seek_table(sizes))
+    dst.with_name(f"{dst.name}.frames").write_text(frame_index(dst), encoding="ascii", newline="\n")
     return len(sizes)
 
 

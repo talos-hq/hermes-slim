@@ -332,7 +332,7 @@ jobs:
             # this smoke run, stand this leg's signed copy beside the archive, outside dist/.
             smoke="$RUNNER_TEMP/smoke"
             mkdir -p "$smoke"
-            cp "$archive" "$archive.sha256" "$helper" dist/hermes-slim-unpack-* "$smoke/"
+            cp "$archive" "$archive.sha256" "$archive.frames" "$helper" dist/hermes-slim-unpack-* "$smoke/"
             (cd "$smoke" && sha256sum zstd-win32-x64.exe > zstd-win32-x64.exe.sha256)
             archive="$smoke/$(basename "$archive")"
           fi

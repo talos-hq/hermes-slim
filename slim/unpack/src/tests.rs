@@ -9,10 +9,10 @@ use std::sync::atomic::AtomicU64;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh directory under the system temp dir, removed when dropped.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Scratch {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let n = NEXT.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("hs-unpack-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -51,7 +51,7 @@ fn member(
 
 /// Pseudo-random bytes (compressible enough to be realistic, varied enough to catch a
 /// frame handed to the parser out of order).
-fn noise(len: usize, seed: u64) -> Vec<u8> {
+pub(crate) fn noise(len: usize, seed: u64) -> Vec<u8> {
     let mut x = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     (0..len)
         .map(|i| {
@@ -71,7 +71,7 @@ fn long_name() -> String {
     format!("hermes-slim/lib/{}/module.py", "deep".repeat(30))
 }
 
-fn bundle_tar() -> Vec<u8> {
+pub(crate) fn bundle_tar() -> Vec<u8> {
     let mut b = tar::Builder::new(Vec::new());
     member(
         &mut b,
@@ -154,7 +154,7 @@ fn bundle_tar() -> Vec<u8> {
 
 /// Independent frames of `frame` bytes plus a seek table, byte for byte what
 /// `slim/zstd_frames.py` writes.
-fn seekable(data: &[u8], frame: usize) -> Vec<u8> {
+pub(crate) fn seekable(data: &[u8], frame: usize) -> Vec<u8> {
     let mut out = Vec::new();
     let mut table = Vec::new();
     let mut count = 0u32;
@@ -183,10 +183,11 @@ fn options(archive: &Path, dest: &Path) -> Options {
         strip: 1,
         decoders: 4,
         writers: 8,
+        stream: None,
     }
 }
 
-fn assert_tree(dest: &Path) {
+pub(crate) fn assert_tree(dest: &Path) {
     assert_eq!(
         fs::read(dest.join("bin/hermes")).unwrap(),
         b"#!/bin/sh\necho hermes\n"

@@ -119,17 +119,43 @@ def main() -> int:
         # Unpack the way users do: through the installer, with the release's unpacker (or,
         # on Windows without one, zstd-win32-x64.exe and tar.exe) beside the archive.
         here = Path(__file__).resolve().parent
+        # With the unpacker and the bundle's frame index, install the way a release does: over
+        # HTTP (slim/tests/range_server.py serving this directory), streamed, so download,
+        # frame checks, decode and file writes are exercised together on every OS.
+        frames = args.archive.with_name(f"{args.archive.name}.frames")
+        stream = bool(unpacker) and frames.exists()
+        server = None
+        source = str(args.archive)
+        if stream:
+            # Served from a directory of its own: the server writes its logs where it serves.
+            served = root / "served"
+            served.mkdir()
+            for f in [args.archive, *args.archive.parent.glob(f"{args.archive.name}.*"), *args.archive.parent.glob("hermes-slim-unpack-*")]:
+                try:
+                    os.link(f, served / f.name)
+                except OSError:
+                    shutil.copyfile(f, served / f.name)
+            server = subprocess.Popen([sys.executable, str(here / "tests" / "range_server.py"), str(served)],
+                                      stdout=subprocess.PIPE, text=True)
+            source = f"http://127.0.0.1:{int(server.stdout.readline())}/{args.archive.name}"
         if windows:
             cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(here / "install.ps1"),
-                   "-Archive", str(args.archive), "-Dir", str(root / "install"), "-NoSetup"]
+                   "-Archive", source, "-Dir", str(root / "install"), "-NoSetup"]
         else:
-            cmd = ["sh", str(here / "install.sh"), "--archive", str(args.archive), "--dir", str(root / "install"), "--no-setup"]
-        installed = subprocess.run(cmd, env=dict(os.environ, HOME=str(root / "install-home")),
-                                   capture_output=True, text=True, timeout=1800, check=False)
+            cmd = ["sh", str(here / "install.sh"), "--archive", source, "--dir", str(root / "install"), "--no-setup"]
+        try:
+            installed = subprocess.run(cmd, env=dict(os.environ, HOME=str(root / "install-home")),
+                                       capture_output=True, text=True, timeout=1800, check=False)
+        finally:
+            if server:
+                server.terminate()
         print(installed.stdout + installed.stderr, flush=True)
         installed.check_returncode()
-        if unpacker and "unpacked " not in installed.stdout + installed.stderr:
+        output = installed.stdout + installed.stderr
+        if unpacker and "unpacked " not in output:
             raise SystemExit(f"{unpacker[0].name} sits beside the archive but the installer did not unpack with it")
+        if stream and "(streamed)" not in output:
+            raise SystemExit("the bundle has a frame index but the installer did not stream it")
         bundle = root / "install" / "current"
     else:
         # .tar.zst: GNU tar (with zstd on PATH) and bsdtar both pick the codec from the suffix.

@@ -322,6 +322,25 @@ have_unpacker() {
     { echo "hermes-slim: $unpack_asset sha256 mismatch" >&2; exit 1; }
   chmod +x "$tmp/unpack"
 }
+# Download, verify and unpack in one pass: hermes-slim-unpack fetches the bundle's frames in
+# order over several connections, checks each against the bundle's frame index (pinned by the
+# manifest, or naming the mirror's sha256) once all its bytes are in, and unpacks it while
+# later frames download. Any failure falls back to downloading the bundle, then unpacking.
+streamed=""
+stream_install() {
+  [ -n "$frames_sha$expected" ] && have_unpacker "" || return 1
+  echo "→ installing to $dir (downloading and unpacking at once)"
+  rm -rf "$dir/hermes-slim.new" && mkdir "$dir/hermes-slim.new"
+  if "$tmp/unpack" --url "$1" ${frames_sha:+--index-sha "$frames_sha"} ${expected:+--sha256 "$expected"} \
+       "$dir/hermes-slim.new" --strip 1; then
+    [ -z "$expected" ] || echo "$expected" >"$dir/hermes-slim.new/.bundle-sha256"
+    streamed=1
+    return 0
+  fi
+  echo "→ that did not finish; downloading the bundle first instead" >&2
+  rm -rf "$dir/hermes-slim.new"
+  return 1
+}
 unpack() {
   if have_unpacker "$1"; then
     "$tmp/unpack" "$1" "$2" --strip 1 && return 0
@@ -370,6 +389,7 @@ mkdir -p "$dir/downloads"
 base=""
 expected=""
 unpack_sha=""
+frames_sha=""
 case "$archive" in
   http://*|https://*)
     base="${archive%/*}"
@@ -383,7 +403,8 @@ case "$archive" in
       2) echo "→ no $archive.sha256 on this mirror; installing unverified" ;;
       *) echo "hermes-slim: could not download $archive.sha256; check the connection and rerun" >&2; exit 1 ;;
     esac
-    if [ -z "$expected" ] || need_bundle; then fetch "$archive" "$dir/downloads/${archive##*/}" "$expected"; fi
+    if [ -n "$expected" ] && need_bundle && stream_install "$archive"; then :
+    elif [ -z "$expected" ] || need_bundle; then fetch "$archive" "$dir/downloads/${archive##*/}" "$expected"; fi
     archive="$dir/downloads/${archive##*/}" ;;
   ?*)
     [ -f "$archive" ] || { echo "hermes-slim: no such archive: $archive" >&2; exit 1; }
@@ -404,6 +425,7 @@ case "$archive" in
       asset="$(echo "$line" | cut -d' ' -f3)"
       expected="$(echo "$line" | cut -d' ' -f4)"
       unpack_sha="$(grep "^unpack [^ ]* $unpack_asset " "$tmp/manifest" | head -1 | cut -d' ' -f4)"
+      frames_sha="$(grep "^frames $target $asset.frames " "$tmp/manifest" | head -1 | cut -d' ' -f4)"
     else
       # Releases from before the manifest: one API call gives the tag and the asset names.
       if [ "$version" = latest ]; then release_api="releases/latest"; else release_api="releases/tags/$version"; fi
@@ -430,14 +452,17 @@ case "$archive" in
         { echo "hermes-slim: could not download $asset.sha256; check the connection and rerun" >&2; exit 1; }
       expected="$(cut -d' ' -f1 "$tmp/$asset.sha256")"
     fi
-    if need_bundle; then fetch "$base/$asset" "$dir/downloads/$asset" "$expected"; fi
+    if need_bundle && { [ -z "$frames_sha" ] || ! stream_install "$base/$asset"; }; then
+      fetch "$base/$asset" "$dir/downloads/$asset" "$expected"
+    fi
     archive="$dir/downloads/$asset" ;;
 esac
 
 if installed "$dir/current"; then
   echo "→ this bundle is already installed in $dir/current"
 else
-  if installed "$dir/hermes-slim.new"; then
+  if [ -n "$streamed" ]; then :
+  elif installed "$dir/hermes-slim.new"; then
     echo "→ reusing the bundle unpacked by an earlier run"
   else
     echo "→ installing to $dir"
