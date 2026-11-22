@@ -961,6 +961,10 @@ def _build_provider_picker_rows(config: dict, active: str, provider_labels: dict
                 label = tier_row["name"]
             _add(slug, label, [], bool(active) and slug == active)
 
+    from hermes_cli.setup_clud import CLUD_CODEX_LABEL, clud_available
+    if clud_available():
+        _add("setup-clud", CLUD_CODEX_LABEL, [], False)
+
     for key, provider_info in custom_provider_map.items():
         saved_model = provider_info.get("model", "")
         model_hint = f" — {saved_model}" if saved_model else ""

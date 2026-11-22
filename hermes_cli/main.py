@@ -795,6 +795,7 @@ from hermes_cli.model_setup_flows import (
     _profile_model_setup_flow,
 )
 from hermes_cli.model_setup_flows_local import _model_flow_local
+from hermes_cli.setup_clud import select_clud_model
 logger = logging.getLogger(__name__)
 from hermes_cli.main_agent_cmds import (
     cmd_acp,
@@ -1866,10 +1867,7 @@ def cmd_model(args):
         )
 
 
-# Provider id -> flow(config, current_model, args). Lambdas resolve the
-# _model_flow_* names at call time so test monkeypatches keep intercepting.
-# ``custom:*``, remove-custom and the generic API-key set are the fallthrough
-# branches in select_provider_and_model.
+# Lambdas resolve flow names at call time so tests can patch the main facade.
 _PROVIDER_MODEL_FLOWS = {
     "openrouter": lambda c, m, a: _model_flow_openrouter(c, m),
     "moa": lambda c, m, a: _model_flow_moa(c, m),
@@ -1881,6 +1879,7 @@ _PROVIDER_MODEL_FLOWS = {
     "minimax-oauth": lambda c, m, a: _model_flow_minimax_oauth(c, m, args=a),
     "custom": lambda c, m, a: _model_flow_custom(c),
     "llamacpp": lambda c, m, a: _model_flow_local(c, m),
+    "setup-clud": lambda c, m, a: select_clud_model(m),
     "anthropic": lambda c, m, a: _model_flow_anthropic(c, m),
     "kimi-coding": lambda c, m, a: _model_flow_kimi(c, m),
     "stepfun": lambda c, m, a: _model_flow_stepfun(c, m),

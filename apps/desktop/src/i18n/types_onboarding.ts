@@ -15,6 +15,9 @@ export interface OnboardingTranslations {
   connected: string
   featuredPitch: string
   fireworksPitch: string
+  cludTitle: string
+  cludPitch: string
+  cludInstallHint: string
   localModelsTitle: string
   localModelsPitch: string
   openRouterPitch: string

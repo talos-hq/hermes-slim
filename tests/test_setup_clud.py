@@ -11,6 +11,7 @@ import argparse
 import shlex
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,7 +50,7 @@ def test_print_shows_the_command_and_runs_nothing(monkeypatch, capsys):
 
 
 def test_a_missing_clud_is_a_refused_request(monkeypatch, capsys):
-    monkeypatch.setattr(setup_clud.shutil, "which", lambda name: None)
+    monkeypatch.setattr(setup_clud, "locate_command", lambda name: SimpleNamespace(command=()))
     code = setup_clud.run_clud_section()
     assert code == setup_clud.EXIT_NOCLUD == 2
     out = capsys.readouterr().out
@@ -60,12 +61,12 @@ def test_a_missing_clud_is_a_refused_request(monkeypatch, capsys):
 def test_a_present_clud_is_run_with_the_caller_terminal(monkeypatch, capsys):
     seen = {}
 
-    def fake_run(command, check):
+    def fake_run(command, check, env):
         seen["command"] = command
         seen["check"] = check
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(setup_clud.shutil, "which", lambda name: "/usr/bin/clud")
+    monkeypatch.setattr(setup_clud, "locate_command", lambda name: SimpleNamespace(command=("/usr/bin/clud",)))
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert setup_clud.run_clud_section() == 0
     assert seen["command"][:3] == ["/usr/bin/clud", "install", "hermes"]
@@ -74,11 +75,11 @@ def test_a_present_clud_is_run_with_the_caller_terminal(monkeypatch, capsys):
 
 
 def test_clud_failure_is_reported_and_propagated(monkeypatch, capsys):
-    monkeypatch.setattr(setup_clud.shutil, "which", lambda name: "/usr/bin/clud")
+    monkeypatch.setattr(setup_clud, "locate_command", lambda name: SimpleNamespace(command=("/usr/bin/clud",)))
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda command, check: subprocess.CompletedProcess(command, 1),
+        lambda command, check, env: subprocess.CompletedProcess(command, 1),
     )
     assert setup_clud.run_clud_section() == 1
     out = capsys.readouterr().out

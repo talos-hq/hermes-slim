@@ -156,3 +156,17 @@ export function ProviderRow({
     </RowButton>
   )
 }
+
+export function CludProviderRow({ available, onClick }: { available?: boolean; onClick: () => void }) {
+  const { t } = useI18n()
+
+  if (available === undefined) {
+    return null
+  }
+
+  if (!available) {
+    return <p className="px-3 text-xs text-muted-foreground">{t.onboarding.cludInstallHint}</p>
+  }
+
+  return <KeyProviderRow onClick={onClick} pitch={t.onboarding.cludPitch} title={t.onboarding.cludTitle} />
+}
