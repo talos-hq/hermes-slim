@@ -23,6 +23,7 @@ on:
       - slim/audit_install.py
       - slim/macho_signatures.py
       - slim/tests/range_server.py
+      - slim/tests/install_ps1_test.ps1
       - .github/workflows/slim-install-audit.yml
 
 permissions:
@@ -50,6 +51,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # install.ps1 under Windows PowerShell 5.1, the one `irm ... | iex` users get, against
+      # a local range server that breaks the connection every way a bad network does.
+      - name: install.ps1 over a bad connection
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File slim/tests/install_ps1_test.ps1 -Python python
       - name: Install and audit
         shell: bash
         env:

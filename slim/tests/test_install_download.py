@@ -50,8 +50,8 @@ class DownloadTests(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.home), PATH=f"{commands}:{os.environ['PATH']}")
         self.env.pop("HERMES_SLIM_DIR", None)
 
-    def serve(self, drop_after=None, delay=0.0):
-        server = range_server.serve(self.release, drop_after=drop_after, delay=delay)
+    def serve(self, drop_after=None, delay=0.0, **faults):
+        server = range_server.serve(self.release, drop_after=drop_after, delay=delay, **faults)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return f"http://127.0.0.1:{server.server_address[1]}/{ASSET}"
@@ -59,7 +59,7 @@ class DownloadTests(unittest.TestCase):
     def install(self, url, *extra):
         return subprocess.run(
             ["sh", str(INSTALLER), "--archive", url, "--no-setup", *extra],
-            env=self.env, capture_output=True, text=True, timeout=120, check=False,
+            env=self.env, capture_output=True, text=True, timeout=150, check=False,
         )
 
     def requests(self):
@@ -140,6 +140,38 @@ class DownloadTests(unittest.TestCase):
         starts = {int(line.rsplit("=", 1)[1].split("-")[0]) for line in self.requests() if "=" in line}
         # Every range was cut at 1 MiB and then requested again from exactly that offset.
         self.assertTrue({i * chunk + 2**20 for i in range(4)} <= starts, starts)
+
+    # A bad connection: each test is one way it breaks a download (range_server.py's faults).
+
+    def test_network_outage_is_waited_out(self):
+        # Down for 10 s from the first range: back-to-back retries would all land inside it.
+        result = self.install(self.serve(outage=10.0), "--jobs", "4")
+        self.assert_installed(result)
+
+    def test_stalled_connection_is_abandoned_and_resumed(self):
+        # Each range sends 1 MiB and then nothing over a live socket: the installer must not
+        # wait on it forever, and must resume from the bytes it got.
+        result = self.install(self.serve(stall_after=2**20), "--jobs", "4")
+        self.assert_installed(result)
+        chunk = (len((self.release / ASSET).read_bytes()) + 3) // 4
+        starts = {int(line.rsplit("=", 1)[1].split("-")[0]) for line in self.requests() if "=" in line}
+        self.assertTrue({i * chunk + 2**20 for i in range(4)} <= starts, starts)
+
+    def test_checksum_hiccup_is_retried_not_skipped(self):
+        # A 503 on the .sha256 is not "this mirror publishes no checksum": installing
+        # unverified on one bad response would defeat the check.
+        result = self.install(self.serve(flaky=(f"{ASSET}.sha256",)))
+        self.assert_installed(result)
+
+    def test_proxy_that_ignores_ranges_falls_back_to_one_stream(self):
+        result = self.install(self.serve(ignore_ranges=True), "--jobs", "4")
+        self.assert_installed(result)
+
+    def test_missing_checksum_on_a_mirror_still_installs(self):
+        (self.release / f"{ASSET}.sha256").unlink()
+        result = self.install(self.serve())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.home / ".hermes-slim" / "current" / "payload.bin").stat().st_size, 12 * 2**20)
 
     def test_rerun_continues_a_killed_download(self):
         url = self.serve()

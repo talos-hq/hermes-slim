@@ -14,7 +14,9 @@
 # The bundle downloads over -Jobs parallel byte ranges (default 8). Every stage resumes:
 # the download lives in <Dir>\downloads until it is installed, each range continues from
 # where it stopped, and a rerun skips a download or unpack that already finished for the
-# same sha256. The bundle is a .tar.zst (a .zip for releases before #141), unpacked with
+# same sha256. A bad connection (drops, stalls, outages, flaky small files, proxies that
+# ignore ranges) is retried with backoff and never turns checksum verification off
+# (slim/DESIGN.md, "Install entry points"). The bundle is a .tar.zst (a .zip for releases before #141), unpacked with
 # the release's standalone zstd-win32-x64.exe and Windows' own tar.exe. -Archive installs
 # a bundle from disk (with zstd-win32-x64.exe beside it) or any HTTP(S) mirror (URL.sha256
 # is checked when present); -Upgrade keeps the configuration and only restarts the
@@ -41,43 +43,132 @@ $target = if ($Arch) { "win32-$Arch" } elseif ($machine -eq "ARM64") { "win32-ar
 
 function Get-Sha256([string]$Path) { (Get-FileHash $Path -Algorithm SHA256).Hash.ToLower() }
 
+# A bad connection is the normal case this has to survive. Retry N of a fetch that is getting
+# nowhere waits 1, 2, 4, 8, 16, then 30 s, so a network that is down for a minute is waited
+# out instead of burning every retry inside it.
+function Wait-Backoff([int]$Attempt) { Start-Sleep -Seconds ([Math]::Min(30, [Math]::Pow(2, $Attempt - 1))) }
+
+# HTTP status of a failed request; 0 when no response arrived (DNS, refused, reset, stall).
+function Get-Status($ErrorRecord) {
+    for ($e = $ErrorRecord.Exception; $e; $e = $e.InnerException) {
+        if ($e -is [Net.WebException] -and $e.Response) { return [int]$e.Response.StatusCode }
+    }
+    0
+}
+function Test-Permanent([int]$Status) { $Status -ge 400 -and $Status -lt 500 -and $Status -notin 408, 429 }
+
+# Text of a small file (checksum, manifest) through a bad connection; $null when the server
+# answers that it does not exist (404/410). Any other failure is retried and then thrown: a
+# 503 is never "absent", or one bad response would turn checksum verification off.
 function Get-Text([string]$Url) {
-    $client = New-Object Net.WebClient
-    try { $client.DownloadString($Url) } finally { $client.Dispose() }
+    for ($try = 1; ; $try++) {
+        try {
+            $req = [Net.HttpWebRequest]::Create($Url)
+            $req.Timeout = 30000
+            $req.ReadWriteTimeout = 20000
+            $resp = $req.GetResponse()
+            try { return (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } finally { $resp.Dispose() }
+        } catch {
+            $status = Get-Status $_
+            if ($status -eq 404 -or $status -eq 410) { return $null }
+            if ((Test-Permanent $status) -or $try -ge 8) { throw }
+        }
+        Wait-Backoff $try
+    }
 }
 
 # Total size when the server honours byte ranges (GitHub's release CDN does), else 0.
 function Get-RangeSize([string]$Url) {
-    try {
-        $req = [Net.HttpWebRequest]::Create($Url)
-        $req.AddRange([long]0, [long]0)
-        $resp = $req.GetResponse()
+    for ($try = 1; $try -le 4; $try++) {
         try {
-            if ([int]$resp.StatusCode -eq 206 -and $resp.Headers["Content-Range"] -match '/(\d+)$') { return [long]$Matches[1] }
-        } finally { $resp.Dispose() }
-    } catch { }
-    return [long]0
+            $req = [Net.HttpWebRequest]::Create($Url)
+            $req.AddRange([long]0, [long]0)
+            $req.Timeout = 30000
+            $resp = $req.GetResponse()
+            try {
+                if ([int]$resp.StatusCode -eq 206 -and $resp.Headers["Content-Range"] -match '/(\d+)$') { return [long]$Matches[1] }
+                return [long]0
+            } finally { $resp.Dispose() }
+        } catch {
+            if (Test-Permanent (Get-Status $_)) { return [long]0 }
+        }
+        if ($try -lt 4) { Wait-Backoff $try }
+    }
+    [long]0
 }
 
-# Appends bytes From+<already on disk>..To of Url to Path. Runs inside a runspace.
+# Appends bytes From+<already on disk>..To of Url to Path; To -1 means to the end, where a
+# 200 restarts the file. Throws "whole-file" when a range is answered with the whole file (some
+# proxies do), and gives up on a connection that stays silent for 20 s: a dead link or a
+# wedged proxy holds the socket open, and a plain read would wait on it forever. The bytes
+# that arrived stay on disk for the next attempt. Runs inside a runspace: self-contained.
 $FetchRange = {
-    param([string]$Url, [string]$Path, [long]$From, [long]$To)
+    param([string]$Url, [string]$Path, [long]$From, [long]$To, [long]$Total)
     $have = if (Test-Path -LiteralPath $Path) { (Get-Item -LiteralPath $Path).Length } else { [long]0 }
-    if ($have -gt ($To - $From + 1)) { Remove-Item -LiteralPath $Path; $have = [long]0 }
-    if ($have -eq ($To - $From + 1)) { return }
+    if ($To -ge 0) {
+        if ($have -gt ($To - $From + 1)) { Remove-Item -LiteralPath $Path; $have = [long]0 }
+        if ($have -eq ($To - $From + 1)) { return }
+    }
     $req = [Net.HttpWebRequest]::Create($Url)
-    $req.AddRange([long]($From + $have), [long]$To)
+    if ($To -ge 0) { $req.AddRange([long]($From + $have), [long]$To) } elseif ($have) { $req.AddRange([long]$have) }
     $req.Timeout = 30000
-    $req.ReadWriteTimeout = 60000
+    $req.ReadWriteTimeout = 20000
     $resp = $req.GetResponse()
     try {
-        if ([int]$resp.StatusCode -ne 206) { throw "server ignored the byte range" }
+        $mode = [IO.FileMode]::Append
+        if ([int]$resp.StatusCode -eq 200) {
+            if ($To -ge 0) { throw "whole-file" }
+            $mode = [IO.FileMode]::Create
+        } elseif ([int]$resp.StatusCode -ne 206) {
+            throw "unexpected HTTP $([int]$resp.StatusCode)"
+        } else {
+            $first = if ($To -ge 0) { $From + $have } else { $have }
+            $whole = if ($To -ge 0) { "$Total" } else { '\d+' }
+            if ($resp.Headers["Content-Range"] -notmatch "^bytes $first-\d+/$whole$") { throw "the server sent other bytes than asked" }
+        }
         $in = $resp.GetResponseStream()
-        $out = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write)
-        try { $in.CopyTo($out, 1MB) } finally { $out.Dispose(); $in.Dispose() }
+        $out = [IO.File]::Open($Path, $mode, [IO.FileAccess]::Write)
+        $buf = New-Object byte[] 1MB
+        $wrote = [long]0
+        try {
+            while ($true) {
+                $read = $in.ReadAsync($buf, 0, $buf.Length)
+                if (-not $read.Wait(20000)) { $req.Abort(); throw "no data for 20 s" }
+                if ($read.Result -le 0) { break }
+                $out.Write($buf, 0, $read.Result)
+                $wrote += $read.Result
+            }
+        } finally { $out.Dispose(); $in.Dispose() }
+        if ($resp.ContentLength -gt 0 -and $wrote -lt $resp.ContentLength) { throw "connection closed early" }
     } finally { $resp.Dispose() }
 }
 
+# After each round of a download: retry at once while bytes keep arriving, back off while
+# none do, and stop after about two minutes without a byte (a rerun resumes).
+function Step-Retry([hashtable]$State, [long]$Got, [string]$Url) {
+    if ($Got -gt $State.Last) { $State.Idle = 0; $State.Last = $Got; return }
+    $State.Idle++
+    if ($State.Idle -gt 7) { throw "no download progress for about two minutes ($Url); check the connection and rerun to resume" }
+    Wait-Backoff $State.Idle
+}
+
+# One stream into Out.part, resumed from its last byte after every drop or stall.
+function Receive-Stream([string]$Url, [string]$Out) {
+    $state = @{ Idle = 0; Last = [long]-1 }
+    while ($true) {
+        try { & $FetchRange $Url "$Out.part" 0 -1 0; Move-Item -Force "$Out.part" $Out; return }
+        catch {
+            $status = Get-Status $_
+            if ($status -in 401, 403, 404, 410) { throw "$Url answered HTTP $status" }
+            Write-Host "  retrying: $($_.Exception.GetBaseException().Message)"
+        }
+        $got = if (Test-Path "$Out.part") { (Get-Item "$Out.part").Length } else { [long]0 }
+        Step-Retry $state $got $Url
+    }
+}
+
+# Parallel byte ranges into Out.parts\<i>, each validated by its Content-Range before a byte
+# lands. Returns $false when the server sends whole files instead of ranges.
 function Receive-Ranges([string]$Url, [string]$Out, [long]$Size) {
     $parts = "$Out.parts"
     $sizeFile = Join-Path $parts "size"
@@ -90,27 +181,35 @@ function Receive-Ranges([string]$Url, [string]$Out, [long]$Size) {
     $ranges = for ($from = [long]0; $from -lt $Size; $from += $chunk) {
         @{ Path = Join-Path $parts ([string]($from / $chunk)); From = $from; To = [Math]::Min($from + $chunk, $Size) - 1 }
     }
+    $onDisk = { ($ranges | ForEach-Object { if (Test-Path $_.Path) { (Get-Item $_.Path).Length } else { 0 } } | Measure-Object -Sum).Sum }
+    $state = @{ Idle = 0; Last = [long]-1 }
     $pool = [RunspaceFactory]::CreateRunspacePool(1, $Jobs)
     $pool.Open()
     try {
-        for ($round = 0; ; $round++) {
+        while ($true) {
             $todo = @($ranges | Where-Object { -not (Test-Path $_.Path) -or (Get-Item $_.Path).Length -ne ($_.To - $_.From + 1) })
             if (-not $todo) { break }
-            if ($round -ge 5) { throw "download of $Url keeps failing; rerun to resume it" }
+            Step-Retry $state (& $onDisk) $Url
             $running = foreach ($r in $todo) {
-                $ps = [PowerShell]::Create().AddScript($FetchRange).AddArgument($Url).AddArgument($r.Path).AddArgument($r.From).AddArgument($r.To)
+                $ps = [PowerShell]::Create().AddScript($FetchRange).AddArgument($Url).AddArgument($r.Path).AddArgument($r.From).AddArgument($r.To).AddArgument($Size)
                 $ps.RunspacePool = $pool
                 @{ PS = $ps; Handle = $ps.BeginInvoke() }
             }
             while (@($running | Where-Object { -not $_.Handle.IsCompleted }).Count) {
-                $got = ($ranges | ForEach-Object { if (Test-Path $_.Path) { (Get-Item $_.Path).Length } else { 0 } } | Measure-Object -Sum).Sum
+                $got = & $onDisk
                 Write-Host -NoNewline ("`r  {0,3}%  {1} / {2} MiB" -f [int]($got * 100 / $Size), [int]($got / 1MB), [int]($Size / 1MB))
                 Start-Sleep -Milliseconds 500
             }
+            $whole = $false
             foreach ($j in $running) {
-                try { $j.PS.EndInvoke($j.Handle) | Out-Null } catch { Write-Host "`n  retrying a range: $($_.Exception.InnerException.Message)" }
+                try { $j.PS.EndInvoke($j.Handle) | Out-Null }
+                catch {
+                    $why = $_.Exception.GetBaseException().Message
+                    if ($why -eq "whole-file") { $whole = $true } else { Write-Host "`n  retrying a range: $why" }
+                }
                 $j.PS.Dispose()
             }
+            if ($whole) { Remove-Item -Recurse -Force $parts; return $false }
         }
     } finally { $pool.Dispose() }
     Write-Host ""
@@ -123,6 +222,7 @@ function Receive-Ranges([string]$Url, [string]$Out, [long]$Size) {
     } finally { $dest.Dispose() }
     Move-Item -Force "$Out.tmp" $Out
     Remove-Item -Recurse -Force $parts
+    $true
 }
 
 # Skips Out when it already has Sha256; otherwise downloads it (in parallel ranges when it is
@@ -132,14 +232,15 @@ function Receive-File([string]$Url, [string]$Out, [string]$Sha256) {
     if ($Sha256 -and (Test-Path $Out) -and (Get-Sha256 $Out) -eq $Sha256) { Write-Host "-> $name already downloaded"; return }
     Remove-Item -Force $Out -ErrorAction SilentlyContinue
     $size = if ($Jobs -gt 1) { Get-RangeSize $Url } else { [long]0 }
+    $done = $false
     if ($size -ge 8MB) {
         Write-Host "-> downloading $name ($([int]($size / 1MB)) MiB, $Jobs connections)"
-        Receive-Ranges $Url $Out $size
+        $done = Receive-Ranges $Url $Out $size
+        if (-not $done) { Write-Host "-> the server sends whole files, not byte ranges; downloading as one stream" }
     } else {
         Write-Host "-> downloading $name"
-        Invoke-WebRequest $Url -OutFile "$Out.part" -UseBasicParsing
-        Move-Item -Force "$Out.part" $Out
     }
+    if (-not $done) { Receive-Stream $Url $Out }
     if ($Sha256 -and (Get-Sha256 $Out) -ne $Sha256) {
         Remove-Item -Force $Out
         throw "sha256 mismatch for $name; rerun to download it again"
@@ -177,10 +278,22 @@ function Get-Helper([string]$ArchivePath) {
     if ($onPath) { return $onPath.Source }
     $job = $script:helperJob
     if ($job) {
-        try { $job.Task.Wait() }
-        catch { throw "could not download $zstdAsset from $($job.Base): $($_.Exception.GetBaseException().Message)" }
-        finally { $job.Client.Dispose() }
-        $want = if ($job.Sha256) { $job.Sha256 } else { ((Get-Text "$($job.Base)/$zstdAsset.sha256") -split '\s+')[0] }
+        # The background copy is the fast path; a bad connection gets the retrying, resuming one.
+        $ok = $false
+        try { $ok = $job.Task.Wait(120000) -and -not $job.Task.IsFaulted } catch { }
+        if (-not $ok) { $job.Client.CancelAsync() }
+        $job.Client.Dispose()
+        if (-not $ok) {
+            Write-Host "-> fetching $zstdAsset again"
+            Remove-Item -Force $job.Path -ErrorAction SilentlyContinue
+            Receive-Stream "$($job.Base)/$zstdAsset" $job.Path
+        }
+        $want = $job.Sha256
+        if (-not $want) {
+            $text = Get-Text "$($job.Base)/$zstdAsset.sha256"
+            if (-not $text) { throw "no $zstdAsset.sha256 at $($job.Base)" }
+            $want = ($text -split '\s+')[0]
+        }
         $path = $job.Path
     } else {
         $path = Join-Path (Split-Path $ArchivePath) $zstdAsset
@@ -210,7 +323,9 @@ function Expand-Bundle([string]$ArchivePath, [string]$Dest) {
 
 if ($Archive -match '^https?://') {
     if ($Archive.EndsWith(".tar.zst")) { Start-Helper ($Archive -replace '/[^/]*$', '') "" }
-    try { $expected = ((Get-Text "$Archive.sha256") -split '\s+')[0] } catch { }
+    # A mirror may publish no checksum (404), but one it failed to serve is an error.
+    $text = Get-Text "$Archive.sha256"
+    if ($text) { $expected = ($text -split '\s+')[0] } else { Write-Host "-> no $Archive.sha256 on this mirror; installing unverified" }
     $local = Join-Path $downloads ($Archive -split '/')[-1]
     if (-not $expected -or (Test-NeedBundle)) { Receive-File $Archive $local $expected }
     $Archive = $local
@@ -263,7 +378,9 @@ if ($Archive -match '^https?://') {
         $helperSha = ""
         if (-not $asset) { throw "no $target bundle in release $Version" }
         $name = $asset.name
-        $expected = ((Get-Text "https://github.com/$repo/releases/download/$Version/$name.sha256") -split '\s+')[0]
+        $text = Get-Text "https://github.com/$repo/releases/download/$Version/$name.sha256"
+        if (-not $text) { throw "release $Version has no $name.sha256" }
+        $expected = ($text -split '\s+')[0]
     }
     $Archive = Join-Path $downloads $name
     if ($name.EndsWith(".tar.zst") -and (Test-NeedBundle)) { Start-Helper "https://github.com/$repo/releases/download/$Version" $helperSha }

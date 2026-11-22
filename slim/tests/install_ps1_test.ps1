@@ -1,5 +1,6 @@
 # Drives slim/install.ps1 against slim/tests/range_server.py: parallel ranges, dropped
-# connections, a resumed killed download, a no-op rerun and a corrupt download.
+# connections, a resumed killed download, a no-op rerun, a bad connection (an outage,
+# stalled ranges, a checksum 503, a proxy that ignores ranges) and a corrupt download.
 #
 #   powershell -ExecutionPolicy Bypass -File slim/tests/install_ps1_test.ps1 [-Installer PATH] [-Python python]
 #
@@ -94,6 +95,34 @@ try {
     Expect-Installed $dir
     $want = @(0..3 | ForEach-Object { $_ * $chunk + [Math]::Floor($chunk / 2) })
     Expect ((@(Get-Starts | Sort-Object) -join ",") -eq ($want -join ",")) "killed download resumed mid-range"
+    Stop-Server
+
+    # A bad connection: each case is one way it breaks a download (range_server.py's faults).
+    $url = Start-Server "--outage 10"
+    $dir = Join-Path $work "outage"
+    Expect ((Install $dir @("-Archive", $url, "-Jobs", "4")) -eq 0) "install through a 10 s outage exits 0"
+    Expect-Installed $dir
+    Stop-Server
+
+    $url = Start-Server "--stall-after 1048576"
+    $dir = Join-Path $work "stalled"
+    Expect ((Install $dir @("-Archive", $url, "-Jobs", "4")) -eq 0) "install over stalled connections exits 0"
+    Expect-Installed $dir
+    $starts = Get-Starts
+    Expect (@(0..3 | Where-Object { $starts -notcontains ($_ * $chunk + 1MB) }).Count -eq 0) "each stalled range resumed at its 1 MiB mark"
+    Stop-Server
+
+    $url = Start-Server "--flaky $asset.sha256"
+    $dir = Join-Path $work "flaky-sha"
+    Expect ((Install $dir @("-Archive", $url)) -eq 0) "install through a checksum 503 exits 0"
+    # Expect-Installed checks .bundle-sha256: the checksum was retried, not skipped.
+    Expect-Installed $dir
+    Stop-Server
+
+    $url = Start-Server "--ignore-ranges"
+    $dir = Join-Path $work "no-ranges"
+    Expect ((Install $dir @("-Archive", $url, "-Jobs", "4")) -eq 0) "install through a range-ignoring proxy exits 0"
+    Expect-Installed $dir
     Stop-Server
 
     Set-Content "$zip.sha256" ("0" * 64 + "  $asset")
