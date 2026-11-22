@@ -13,7 +13,8 @@ Three properties (meta issue #138):
              Hermes' PM resolves each of them in the bundle, and installing (plus a
              first `hermes --version`) never runs a package manager.
 3. parallel  the bundle arrives as concurrent HTTP range requests, and independent
-             downloads (bundle, .sha256, zstd helper) overlap instead of queueing.
+             downloads overlap instead of queueing, and the mirror install streams
+             through the unpacker when the release publishes a frame index.
 
 Two installs run with the checkout's own installer: one from the GitHub release
 (what users get) and one with --archive against slim/tests/range_server.py serving the
@@ -349,7 +350,12 @@ def main() -> int:
     mirror = work / "mirror"
     # Both Windows targets unpack with the x64 helper (no ARM64 zstd build upstream).
     helper = "zstd-win32-x64" if WINDOWS else f"zstd-{target}"
-    for name in [asset, f"{asset}.sha256"] + [n for n in assets if n.startswith((helper, f"hermes-slim-unpack-{target}"))]:
+    mirror_assets = [asset, f"{asset}.sha256"]
+    frame_index = f"{asset}.frames"
+    if frame_index in assets:
+        mirror_assets.append(frame_index)
+    mirror_assets.extend(n for n in assets if n.startswith((helper, f"hermes-slim-unpack-{target}")))
+    for name in mirror_assets:
         download(assets[name], mirror / name)
     # The helper runs on the user's machine before anything in the bundle: it must be signed too.
     if MACOS or WINDOWS:
@@ -365,8 +371,14 @@ def main() -> int:
         port = int(server.stdout.readline())
         code, secs = run(installer_cmd(work / "mirror-install", archive=f"http://127.0.0.1:{port}/{asset}"),
                          without_zstd(env), work / "install-mirror.log")
-        tail = (work / "install-mirror.log").read_text(errors="replace").strip().splitlines()[-2:]
+        lines = (work / "install-mirror.log").read_text(errors="replace").strip().splitlines()
+        tail = lines[-2:]
         report.add("install", "installer against the range server", code == 0, f"exit {code} in {secs:.0f}s; " + " / ".join(tail))
+        streamed = next((line for line in lines if line.startswith("unpacked ") and "(streamed)" in line), "")
+        report.add("unpack", "mirror install streamed through hermes-slim-unpack",
+                   code == 0 and bool(streamed) if frame_index in assets else None,
+                   streamed or (f"{frame_index} published but streaming did not complete" if frame_index in assets
+                                else f"no {frame_index} in {rel['tag_name']}"))
     finally:
         server.terminate()
     check_downloads(report, mirror / "timing.log", asset)
