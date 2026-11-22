@@ -51,7 +51,9 @@ def main() -> int:
     target, out = sys.argv[1], Path(sys.argv[2])
     triple = TRIPLES[target]
     env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET=MACOS_MIN)
-    # From the crate directory, so soldr picks up its rust-toolchain.toml.
+    # From the crate directory, so soldr picks up its rust-toolchain.toml. The musl targets
+    # are not the runner's host: their standard library has to be added to the toolchain.
+    subprocess.run(["soldr", "rustup", "target", "add", triple], cwd=CRATE, env=env, check=True, timeout=600)
     subprocess.run(["soldr", "cargo", "build", "--release", "--locked", "--target", triple],
                    cwd=CRATE, env=env, check=True, timeout=3600)
     built = CRATE / "target" / triple / "release" / ("hermes-slim-unpack" + (".exe" if target.startswith("win32-") else ""))
