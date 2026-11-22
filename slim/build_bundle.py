@@ -235,7 +235,7 @@ def write_stamp(app: Path, python: Path) -> None:
 
 
 def stage_pm_tools(bundle: Path, python: Path, target: str, work: Path) -> None:
-    """Node, npm, ripgrep (and git on Windows) into bundle/pm-store, through PM itself
+    """Node, npm, ripgrep and py-spy (plus git on Windows) into bundle/pm-store, through PM itself
     (slim/pm_tools.py), so a client never downloads them (#142). Native builds only:
     npm's install step runs the target's node."""
     home = work / "pm-home"
@@ -431,7 +431,7 @@ def stage(target: str, wheels: Path | None, work: Path, host_work: Path) -> Path
     write_stamp(app, runner)
     if cross_build:
         print(f"pm-store: skipped in a cross build (npm's install runs {target}'s node); "
-              "the client's PM downloads node, npm and ripgrep on first use", flush=True)
+              "the client's PM downloads managed tools on demand", flush=True)
     else:
         stage_pm_tools(bundle, python, target, work)
     write_launchers(bundle, windows)

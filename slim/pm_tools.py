@@ -28,7 +28,7 @@ from pathlib import Path
 # git on POSIX is the system's by PM's design (pm/packages.py Git: "POSIX uses system git
 # by choice"), so only Windows ships it. Chromium and ffmpeg stay on demand: 100+ MB each
 # for features most installs never use.
-TOOLS = ("node", "npm", "ripgrep")
+TOOLS = ("node", "npm", "ripgrep", "py-spy")
 WINDOWS_TOOLS = ("git",)
 STORE = "pm-store"
 
