@@ -944,6 +944,52 @@ class Ripgrep(BinaryPackage):
 
 
 @register
+class PySpy(BinaryPackage):
+    name = "py-spy"
+    optional = True
+    default = True
+    flatten = False
+    binary_rel = {"win32": "py-spy.exe", "posix": "py-spy"}
+    gaps = {"linux-arm64-bionic": "py-spy does not publish an Android build"}
+
+    _repo = "benfred/py-spy"
+    _wheel_platforms = {
+        "darwin-arm64": "macosx_11_0_arm64",
+        "darwin-x64": "macosx_10_12_universal2.macosx_10_12_x86_64.macosx_11_0_arm64",
+        "linux-arm64": "manylinux2014_aarch64.manylinux_2_17_aarch64",
+        "linux-x64": "manylinux1_x86_64.manylinux_2_5_x86_64",
+        "win32-arm64": "win_arm64",
+        "win32-x64": "win_amd64",
+    }
+
+    def fetch_url(self, version: str, target: str) -> str:
+        # The Linux wheels carry static executables, so the same bytes run on musl.
+        platform = self._wheel_platforms[target.removesuffix("-musl")]
+        return f"https://github.com/{self._repo}/releases/download/v{version}/py_spy-{version}-py2.py3-none-{platform}.whl"
+
+    def known_sha256(self, version: str, url: str) -> Optional[str]:
+        return _github_release_digests(self._repo, f"v{version}").get(url.rsplit("/", 1)[-1])
+
+    def latest_versions(self, target: str, locked: Optional[str] = None) -> list[str]:
+        return github_release_tags(self._repo)
+
+    def unpack(self, archive: Path, staged: Path, target: str) -> None:
+        from zipfile import ZipFile
+
+        binary = self._rel(target)
+        staged.mkdir(parents=True, exist_ok=True)
+        with ZipFile(archive) as wheel:
+            for suffix, name in ((f".data/scripts/{binary}", binary), (".dist-info/licenses/LICENSE", "LICENSE")):
+                members = [entry for entry in wheel.namelist() if entry.endswith(suffix)]
+                if len(members) != 1:
+                    raise InstallError(self.name, f"expected one wheel member ending in {suffix}")
+                with wheel.open(members[0]) as source, (staged / name).open("wb") as dest:
+                    shutil.copyfileobj(source, dest)
+        if not target.startswith("win32"):
+            (staged / binary).chmod(0o755)
+
+
+@register
 class CuaDriver(BinaryPackage):
     name = "cua-driver"
     background = True

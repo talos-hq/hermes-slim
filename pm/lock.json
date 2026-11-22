@@ -509,6 +509,43 @@
       },
       "version": "12.0.2"
     },
+    "py-spy": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "8a5adbb5b3ef11bf5132edbd9f841052053abab572f18d3beec166c3f3c14790",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-macosx_11_0_arm64.whl"
+        },
+        "darwin-x64": {
+          "sha256": "d3d3acf5a0cfe7fa8f5b7101dc7d964832e6dc11b0e81877270a071b8ffd6ba0",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-macosx_10_12_universal2.macosx_10_12_x86_64.macosx_11_0_arm64.whl"
+        },
+        "linux-arm64": {
+          "sha256": "a91503bfd625a8ebb304f02ebfe34dd8a5e9873043e6e39138d310840cec18cb",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl"
+        },
+        "linux-arm64-musl": {
+          "sha256": "a91503bfd625a8ebb304f02ebfe34dd8a5e9873043e6e39138d310840cec18cb",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl"
+        },
+        "linux-x64": {
+          "sha256": "286a9ab113d255ffc10bf7e7fe2ae78c82d0dedb95259888e72935cdbd8f41d2",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.whl"
+        },
+        "linux-x64-musl": {
+          "sha256": "286a9ab113d255ffc10bf7e7fe2ae78c82d0dedb95259888e72935cdbd8f41d2",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.whl"
+        },
+        "win32-arm64": {
+          "sha256": "358c97827dfe53fb30e2068862367f3ee4bfacaec7a1ba37a184779a2a899dc3",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-win_arm64.whl"
+        },
+        "win32-x64": {
+          "sha256": "aaf9a921788fa48fcbc13068f8171af422eb2024888e70406a790fee3613555e",
+          "url": "https://github.com/benfred/py-spy/releases/download/v0.4.4/py_spy-0.4.4-py2.py3-none-win_amd64.whl"
+        }
+      },
+      "version": "0.4.4"
+    },
     "python": {
       "artifacts": {
         "darwin-arm64": {
