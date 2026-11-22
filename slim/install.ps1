@@ -330,9 +330,41 @@ function Find-Beside([string]$ArchivePath, [string]$Asset) {
 # or a local -Archive may have it beside the archive. Without it, or if it cannot unpack the
 # bundle, zstd.exe | tar.exe does.
 $script:unpackJob = $null
+$script:unpackPath = $null
 function Get-Unpacker([string]$ArchivePath) {
-    if ($script:unpackJob) { return Complete-Fetch $script:unpackJob -Optional }
+    if ($script:unpackJob) {
+        $script:unpackPath = Complete-Fetch $script:unpackJob -Optional
+        $script:unpackJob = $null
+    }
+    if ($script:unpackPath -or -not $ArchivePath) { return $script:unpackPath }
     Find-Beside $ArchivePath $unpackAsset
+}
+
+# Download, verify and unpack in one pass: the unpacker fetches the bundle's frames in order
+# over several connections, checks each against the bundle's frame index (pinned by the
+# manifest, or naming the mirror's sha256) once all its bytes are in, and unpacks it while
+# later frames download. $false sends the install down the download-then-unpack path.
+$script:streamed = $false
+function Invoke-StreamInstall([string]$Url, [string]$FramesSha) {
+    if (-not ($FramesSha -or $expected)) { return $false }
+    $unpacker = Get-Unpacker ""
+    if (-not $unpacker) { return $false }
+    Write-Host "-> installing to $Dir (downloading and unpacking at once)"
+    Remove-Item -Recurse -Force $new -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $new | Out-Null
+    $argv = @("--url", "`"$Url`"")
+    if ($FramesSha) { $argv += @("--index-sha", $FramesSha) }
+    if ($expected) { $argv += @("--sha256", $expected) }
+    $argv += "`"$new`""
+    $proc = Start-Process $unpacker -ArgumentList ($argv -join " ") -NoNewWindow -Wait -PassThru
+    if (-not $proc.ExitCode) {
+        if ($expected) { Set-Content (Join-Path $new "hermes-slim\.bundle-sha256") $expected }
+        $script:streamed = $true
+        return $true
+    }
+    Write-Host "-> that did not finish (exit $($proc.ExitCode)); downloading the bundle first instead"
+    Remove-Item -Recurse -Force $new -ErrorAction SilentlyContinue
+    $false
 }
 
 # The fallback: a standalone zstd.exe piped into Windows' own tar.exe (bsdtar, in System32
@@ -394,7 +426,8 @@ if ($Archive -match '^https?://') {
     $text = Get-Text "$Archive.sha256"
     if ($text) { $expected = ($text -split '\s+')[0] } else { Write-Host "-> no $Archive.sha256 on this mirror; installing unverified" }
     $local = Join-Path $downloads ($Archive -split '/')[-1]
-    if (-not $expected -or (Test-NeedBundle)) { Receive-File $Archive $local $expected }
+    if ($expected -and $Archive.EndsWith(".tar.zst") -and (Test-NeedBundle) -and (Invoke-StreamInstall $Archive "")) { }
+    elseif (-not $expected -or (Test-NeedBundle)) { Receive-File $Archive $local $expected }
     $Archive = $local
 } elseif ($Archive) {
     if (-not (Test-Path $Archive)) { throw "no such archive: $Archive" }
@@ -428,6 +461,8 @@ if ($Archive -match '^https?://') {
         $unpackAsset = "hermes-slim-unpack-$target.exe"
         $unpackLine = $lines | Where-Object { $_ -match "^unpack $target $([regex]::Escape($unpackAsset)) ([0-9a-f]{64}) " } | Select-Object -First 1
         $unpackSha = if ($unpackLine -match " ([0-9a-f]{64}) ") { $Matches[1] } else { "" }
+        $framesLine = $lines | Where-Object { $_ -match "^frames $target $([regex]::Escape("$name.frames")) ([0-9a-f]{64}) " } | Select-Object -First 1
+        $framesSha = if ($framesLine -match " ([0-9a-f]{64}) ") { $Matches[1] } else { "" }
     } else {
         # Releases from before the manifest: look the asset up through the API.
         $api = if ($Version -eq "latest") { "https://api.github.com/repos/$repo/releases/latest" } else { "https://api.github.com/repos/$repo/releases/tags/$Version" }
@@ -447,6 +482,7 @@ if ($Archive -match '^https?://') {
         }
         $helperSha = ""
         $unpackSha = ""
+        $framesSha = ""
         if (-not $asset) { throw "no $target bundle in release $Version" }
         $name = $asset.name
         $text = Get-Text "https://github.com/$repo/releases/download/$Version/$name.sha256"
@@ -461,13 +497,17 @@ if ($Archive -match '^https?://') {
         if ($unpackSha) { $script:unpackJob = Start-Fetch $unpackAsset $script:releaseBase $unpackSha }
         else { Start-Helper $script:releaseBase $helperSha }
     }
-    if (Test-NeedBundle) { Receive-File "https://github.com/$repo/releases/download/$Version/$name" $Archive $expected }
+    $url = "$($script:releaseBase)/$name"
+    if ((Test-NeedBundle) -and -not ($framesSha -and $unpackSha -and (Invoke-StreamInstall $url $framesSha))) {
+        Receive-File $url $Archive $expected
+    }
 }
 
 if (Test-Installed $current) {
     Write-Host "-> this bundle is already installed in $current"
 } else {
-    if (Test-Installed (Join-Path $new "hermes-slim")) {
+    if ($script:streamed) { }
+    elseif (Test-Installed (Join-Path $new "hermes-slim")) {
         Write-Host "-> reusing the bundle unpacked by an earlier run"
     } else {
         Write-Host "-> installing to $Dir"

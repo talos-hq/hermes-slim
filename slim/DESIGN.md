@@ -187,7 +187,24 @@ off). The release ships it for macOS, Windows (native on ARM64, signed with the 
 bundle, pinned to that sha256, in place of the zstd helper; a mirror or a local archive may
 have it beside the bundle. A checksum mismatch stops the install; a missing unpacker, or one
 that fails to unpack, falls back to `zstd | tar`. The bundle job prints both timings on each
-runner (`slim/bench_unpack.py`). Windows
+runner (`slim/bench_unpack.py`).
+
+A release install does not wait for the download to finish before unpacking. Beside each
+bundle the release publishes `ARCHIVE.frames` (`slim/zstd_frames.py`): the archive's size and
+sha256, then every frame's compressed size, decompressed size and sha256, and the seek
+table's; the manifest pins it as `frames TARGET NAME SHA256 SIZE`. With the unpacker and a
+pinned index the installers hand the URL to `hermes-slim-unpack --url`, which fetches frames
+in archive order over several connections (one range request per ~2 MiB frame, so they land
+roughly in the order tar needs them), checks each frame's sha256 once all its bytes are in,
+decodes it only if it matches, and feeds the tar parser and the writer pool while later
+frames are still downloading: download, decompression and file writes overlap. A dropped or
+stalled transfer resumes from the last byte received (30 s per request, give up after two
+minutes without a byte, like the installers' own downloads), a frame that does not match is
+fetched again, and the whole archive's sha256 is checked at the end. Nothing unverified is
+decoded or written, and the tree goes into `hermes-slim.new`, which only a successful run
+moves into place. HTTPS uses the OS's own certificate store and honours `HTTPS_PROXY`. Any
+failure (no index, a server that ignores ranges, a network that will not recover) falls back
+to downloading the bundle first, then unpacking it. Windows
 unpacks the `.tar.zst` with the release's `zstd-win32-x64.exe` (facebook/zstd's win64 build,
 pinned in `slim/zstd_windows.py` and Authenticode-signed with the bundle) piped through
 `cmd` into System32's `tar.exe` (#141); a release with only a `.zip` still extracts with

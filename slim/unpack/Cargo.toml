@@ -12,6 +12,10 @@ license = "MIT"
 [dependencies]
 tar = { version = ">=0.4.44, <0.5", default-features = false }
 zstd = { version = ">=0.13.3, <0.14", default-features = false }
+sha2 = { version = ">=0.10.9, <0.11", default-features = false }
+# --url: HTTPS with the OS's own trust store (corporate roots work), proxies from the
+# environment. ring rather than aws-lc: no cmake/nasm needed for the Windows builds.
+ureq = { version = ">=3.1, <4", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [profile.release]
 opt-level = 3

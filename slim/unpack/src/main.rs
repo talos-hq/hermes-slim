@@ -1,6 +1,8 @@
 //! hermes-slim-unpack: unpack a hermes-slim `.tar.zst` bundle using every core.
 //!
 //!     hermes-slim-unpack ARCHIVE DEST [--strip N] [--decoders N] [--writers N]
+//!     hermes-slim-unpack --url URL DEST (--index-sha SHA256 | --sha256 SHA256)
+//!                        [--index-url URL] [--connections N] [--strip N] [--writers N]
 //!
 //! `zstd -d | tar -x` does all its work on two threads: one zstd frame is decoded in order,
 //! and tar creates, writes and closes one file at a time. On Windows the close is the
@@ -18,6 +20,10 @@
 //! * **Writers.** A pool of threads each create, write, timestamp and close their files, so
 //!   the per-file scan on close runs in parallel instead of in series.
 //!
+//! With `--url` the archive is never stored: frames are downloaded in order over several
+//! connections, each checked against the release's frame index once it is complete, then
+//! decoded and written while later frames are still downloading (see `stream`).
+//!
 //! Symlinks and hard links are made after every file is written, so no write can follow a
 //! link out of DEST; paths that are absolute or climb with `..` are refused. File modes and
 //! modification times are kept (Python compares a source file's mtime with its `.pyc`).
@@ -31,6 +37,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod stream;
+use sha2::{Digest, Sha256};
 
 /// zstd seekable format: the seek table is a skippable frame with this magic...
 const SKIPPABLE_MAGIC: u32 = 0x184D_2A5E;
@@ -51,8 +60,22 @@ struct Options {
     archive: PathBuf,
     dest: PathBuf,
     strip: usize,
+    /// Frame workers: decoders for a local archive, connections (each also decoding the
+    /// frame it fetched) for `--url`.
     decoders: usize,
     writers: usize,
+    stream: Option<StreamOptions>,
+}
+
+#[derive(Debug, Clone)]
+struct StreamOptions {
+    url: String,
+    index_url: String,
+    /// The index's own sha256 (the release manifest pins it)...
+    index_sha: Option<stream::Hash>,
+    /// ...and/or the archive's, which the index must name.
+    sha256: Option<stream::Hash>,
+    patience: stream::Patience,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -129,9 +152,35 @@ fn seek_table(file: &File, len: u64) -> io::Result<Option<Vec<Frame>>> {
     Ok(Some(frames))
 }
 
+/// Where a worker gets frame `i`'s compressed bytes.
+enum Source {
+    File(File),
+    /// Downloaded and verified against the index (`stream::fetch_frame`).
+    Net {
+        http: Box<stream::Http>,
+        index: stream::Index,
+    },
+}
+
+impl Source {
+    fn load(&self, i: usize, frame: Frame) -> io::Result<Vec<u8>> {
+        match self {
+            Source::File(file) => {
+                let mut compressed = vec![0u8; frame.compressed as usize];
+                read_at(file, frame.offset, &mut compressed)?;
+                Ok(compressed)
+            }
+            Source::Net { http, index } => stream::fetch_frame(http, index, i),
+        }
+    }
+}
+
+/// A decoded frame, with its compressed bytes when the reader hashes the archive.
+type Decoded = (Vec<u8>, Option<Vec<u8>>);
+
 /// Decoded frames handed to the reader in archive order.
 struct Shared {
-    ready: BTreeMap<usize, io::Result<Vec<u8>>>,
+    ready: BTreeMap<usize, io::Result<Decoded>>,
     /// Index of the next frame the reader will take.
     next: usize,
 }
@@ -141,6 +190,10 @@ struct Shared {
 /// bounds memory at about `window` x frame size.
 struct ParallelFrames {
     shared: Arc<(Mutex<Shared>, Condvar)>,
+    /// The compressed archive, hashed in order as the reader takes each frame.
+    hasher: Option<Sha256>,
+    /// Streaming: (compressed bytes taken, archive size, next 10% step to report).
+    progress: Option<(u64, u64, u64)>,
     current: Vec<u8>,
     pos: usize,
     index: usize,
@@ -150,7 +203,7 @@ struct ParallelFrames {
 }
 
 impl ParallelFrames {
-    fn start(file: File, frames: Vec<Frame>, decoders: usize) -> Self {
+    fn start(source: Arc<Source>, frames: Vec<Frame>, decoders: usize, hash: bool) -> Self {
         let total = frames.len();
         let window = decoders * 2;
         let shared = Arc::new((
@@ -160,13 +213,16 @@ impl ParallelFrames {
             }),
             Condvar::new(),
         ));
-        let file = Arc::new(file);
         let frames = Arc::new(frames);
         let claim = Arc::new(AtomicUsize::new(0));
         let workers = (0..decoders.max(1))
             .map(|_| {
-                let (shared, file, frames, claim) =
-                    (shared.clone(), file.clone(), frames.clone(), claim.clone());
+                let (shared, source, frames, claim) = (
+                    shared.clone(),
+                    source.clone(),
+                    frames.clone(),
+                    claim.clone(),
+                );
                 thread::spawn(move || loop {
                     let i = claim.fetch_add(1, Ordering::SeqCst);
                     if i >= frames.len() {
@@ -181,8 +237,8 @@ impl ParallelFrames {
                     }
                     let frame = frames[i];
                     let result = (|| {
-                        let mut compressed = vec![0u8; frame.compressed as usize];
-                        read_at(&file, frame.offset, &mut compressed)?;
+                        // Whole and verified before the decoder sees a byte of it.
+                        let compressed = source.load(i, frame)?;
                         let data =
                             zstd::bulk::decompress(&compressed, frame.decompressed as usize)?;
                         if data.len() != frame.decompressed as usize {
@@ -192,7 +248,7 @@ impl ParallelFrames {
                                 frame.decompressed
                             )));
                         }
-                        Ok(data)
+                        Ok((data, hash.then_some(compressed)))
                     })();
                     let (lock, cvar) = &*shared;
                     lock.lock().unwrap().ready.insert(i, result);
@@ -202,6 +258,8 @@ impl ParallelFrames {
             .collect();
         ParallelFrames {
             shared,
+            hasher: hash.then(Sha256::new),
+            progress: None,
             current: Vec::new(),
             pos: 0,
             index: 0,
@@ -230,13 +288,38 @@ impl Read for ParallelFrames {
             state.next = self.index;
             cvar.notify_all();
             drop(state);
-            self.current = data?;
+            let (data, compressed) = data?;
+            if let (Some(hasher), Some(compressed)) = (&mut self.hasher, compressed) {
+                hasher.update(&compressed);
+                if let Some((done, total, step)) = &mut self.progress {
+                    *done += compressed.len() as u64;
+                    if *done * 10 >= *step * *total {
+                        eprintln!(
+                            "   {:3}% ({} of {} MiB)",
+                            *done * 100 / *total,
+                            *done >> 20,
+                            *total >> 20
+                        );
+                        *step = *done * 10 / *total + 1;
+                    }
+                }
+            }
+            self.current = data;
             self.pos = 0;
         }
         let n = buf.len().min(self.current.len() - self.pos);
         buf[..n].copy_from_slice(&self.current[self.pos..self.pos + n]);
         self.pos += n;
         Ok(n)
+    }
+}
+
+impl ParallelFrames {
+    /// The sha256 of every frame read so far followed by `tail`.
+    fn digest(&mut self, tail: &[u8]) -> stream::Hash {
+        let mut hasher = self.hasher.take().unwrap_or_default();
+        hasher.update(tail);
+        hasher.finalize().into()
     }
 }
 
@@ -483,13 +566,68 @@ fn unpack<R: Read>(stream: R, opts: &Options) -> io::Result<Summary> {
     Ok(summary)
 }
 
+/// Download, verify and unpack in one pass (`--url`).
+fn run_stream(opts: &Options, s: &StreamOptions) -> io::Result<Summary> {
+    let http = stream::Http::new(&s.url, s.patience);
+    let text = http.get_small(&s.index_url, 4 << 20)?;
+    if let Some(pin) = s.index_sha {
+        if stream::sha256(&text) != pin {
+            return Err(invalid(format!("{} sha256 mismatch", s.index_url)));
+        }
+    }
+    let index = stream::parse_index(
+        std::str::from_utf8(&text).map_err(|_| invalid("frame index is not text".into()))?,
+    )?;
+    if let Some(sha) = s.sha256 {
+        if index.sha256 != sha {
+            return Err(invalid(format!(
+                "the frame index describes archive {}, not {}",
+                stream::hex(&index.sha256),
+                stream::hex(&sha)
+            )));
+        }
+    }
+    let frames: Vec<Frame> = index.frames.iter().map(|(f, _)| *f).collect();
+    let (count, want, want_size) = (frames.len(), index.sha256, index.size);
+    let source = Arc::new(Source::Net {
+        http: Box::new(http),
+        index,
+    });
+    let mut parallel = ParallelFrames::start(source.clone(), frames, opts.decoders, true);
+    parallel.progress = Some((0, want_size, 1));
+    let summary = unpack(&mut parallel, opts)?;
+    // tar stops at its end-of-archive marker; the frames after it still count.
+    io::copy(&mut parallel, &mut io::sink())?;
+    // The seek table comes last in the archive and is fetched last: frames start at once.
+    let Source::Net { http, index } = &*source else {
+        unreachable!()
+    };
+    let tail = stream::fetch_tail(http, index)?;
+    if parallel.digest(&tail) != want {
+        return Err(invalid(
+            "the downloaded archive does not match its sha256".into(),
+        ));
+    }
+    Ok(Summary {
+        frames: count,
+        ..summary
+    })
+}
+
 fn run(opts: &Options) -> io::Result<Summary> {
+    if let Some(s) = &opts.stream {
+        return run_stream(opts, s);
+    }
     let file = File::open(&opts.archive)?;
     let len = file.metadata()?.len();
     match seek_table(&file, len)? {
         Some(frames) => {
             let count = frames.len();
-            let summary = unpack(ParallelFrames::start(file, frames, opts.decoders), opts)?;
+            let source = Arc::new(Source::File(file));
+            let summary = unpack(
+                ParallelFrames::start(source, frames, opts.decoders, false),
+                opts,
+            )?;
             Ok(Summary {
                 frames: count,
                 ..summary
@@ -504,24 +642,39 @@ fn run(opts: &Options) -> io::Result<Summary> {
 }
 
 const USAGE: &str =
-    "usage: hermes-slim-unpack ARCHIVE DEST [--strip N] [--decoders N] [--writers N]";
+    "usage: hermes-slim-unpack ARCHIVE DEST [--strip N] [--decoders N] [--writers N]
+       hermes-slim-unpack --url URL DEST (--index-sha SHA256 | --sha256 SHA256)
+                          [--index-url URL] [--connections N] [--strip N] [--writers N]";
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let cores = thread::available_parallelism().map_or(4, |n| n.get());
     let mut positional = Vec::new();
     // Writers mostly wait on the disk and on Defender, not the CPU: more than one per core.
-    let (mut strip, mut decoders, mut writers) = (0usize, cores, (cores * 4).clamp(8, 64));
+    let (mut strip, mut decoders, mut writers) = (0usize, None, (cores * 4).clamp(8, 64));
+    let (mut url, mut index_url, mut index_sha, mut sha256) = (None, None, None, None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut number = |name: &str| -> Result<usize, String> {
+        let mut value = |name: &str| -> Result<String, String> {
             it.next()
-                .and_then(|v| v.parse().ok())
-                .ok_or_else(|| format!("{name} needs a number\n{USAGE}"))
+                .cloned()
+                .ok_or_else(|| format!("{name} needs a value\n{USAGE}"))
+        };
+        let number = |name: &str, v: String| -> Result<usize, String> {
+            v.parse()
+                .map_err(|_| format!("{name} needs a number\n{USAGE}"))
+        };
+        let hash = |name: &str, v: String| -> Result<stream::Hash, String> {
+            stream::parse_hash(&v.to_ascii_lowercase())
+                .ok_or_else(|| format!("{name} needs a sha256 (64 hex digits)"))
         };
         match arg.as_str() {
-            "--strip" => strip = number("--strip")?,
-            "--decoders" => decoders = number("--decoders")?.max(1),
-            "--writers" => writers = number("--writers")?.max(1),
+            "--strip" => strip = number(arg, value(arg)?)?,
+            "--decoders" | "--connections" => decoders = Some(number(arg, value(arg)?)?.max(1)),
+            "--writers" => writers = number(arg, value(arg)?)?.max(1),
+            "--url" => url = Some(value(arg)?),
+            "--index-url" => index_url = Some(value(arg)?),
+            "--index-sha" => index_sha = Some(hash(arg, value(arg)?)?),
+            "--sha256" => sha256 = Some(hash(arg, value(arg)?)?),
             "-h" | "--help" => return Err(USAGE.to_string()),
             flag if flag.starts_with("--") => {
                 return Err(format!("unknown option {flag}\n{USAGE}"))
@@ -529,13 +682,38 @@ fn parse(args: &[String]) -> Result<Options, String> {
             _ => positional.push(PathBuf::from(arg)),
         }
     }
-    let [archive, dest] = <[PathBuf; 2]>::try_from(positional).map_err(|_| USAGE.to_string())?;
+    let Some(url) = url else {
+        let [archive, dest] =
+            <[PathBuf; 2]>::try_from(positional).map_err(|_| USAGE.to_string())?;
+        return Ok(Options {
+            archive,
+            dest,
+            strip,
+            decoders: decoders.unwrap_or(cores),
+            writers,
+            stream: None,
+        });
+    };
+    let [dest] = <[PathBuf; 1]>::try_from(positional).map_err(|_| USAGE.to_string())?;
+    if index_sha.is_none() && sha256.is_none() {
+        // Frames are written as they arrive: something must pin what they should be.
+        return Err(format!("--url needs --index-sha or --sha256\n{USAGE}"));
+    }
     Ok(Options {
-        archive,
+        archive: PathBuf::from(&url),
         dest,
         strip,
-        decoders,
+        // Each connection also decodes the frame it fetched; more than ~8 rarely helps a
+        // single server and costs a frame of memory each.
+        decoders: decoders.unwrap_or(cores.clamp(4, 8)),
         writers,
+        stream: Some(StreamOptions {
+            index_url: index_url.unwrap_or_else(|| format!("{url}.frames")),
+            url,
+            index_sha,
+            sha256,
+            patience: stream::Patience::default(),
+        }),
     })
 }
 
@@ -555,12 +733,17 @@ fn main() {
     let started = Instant::now();
     match run(&opts) {
         Ok(s) => eprintln!(
-            "unpacked {} files ({} MiB) in {:.1}s: {} frames, {} decoders, {} writers",
+            "unpacked {} files ({} MiB) in {:.1}s: {} frames, {} {}, {} writers",
             s.files,
             s.bytes >> 20,
             started.elapsed().as_secs_f64(),
             s.frames.max(1),
             if s.frames > 0 { opts.decoders } else { 1 },
+            if opts.stream.is_some() {
+                "connections (streamed)"
+            } else {
+                "decoders"
+            },
             opts.writers
         ),
         Err(e) => {
@@ -570,5 +753,7 @@ fn main() {
     }
 }
 
+#[cfg(test)]
+mod stream_tests;
 #[cfg(test)]
 mod tests;
