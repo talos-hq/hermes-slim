@@ -91,7 +91,7 @@ def classify(path: Path) -> str | None:
 
 def scan(root: Path) -> dict[Path, str]:
     found = {}
-    for path in sorted(root.rglob("*")):
+    for path in [root] if root.is_file() else sorted(root.rglob("*")):
         if path.is_file() and not path.is_symlink():
             kind = classify(path)
             if kind is not None:

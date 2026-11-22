@@ -287,7 +287,47 @@ start_helper() {
   get "$base/$zstd_asset.sha256" "$tmp/zstd.sha256" &
   helper_pids="$helper_pids $!"
 }
+# hermes-slim-unpack (slim/unpack) decodes the bundle's zstd frames on every core and
+# writes its ~27,000 files on many threads at once, instead of zstd | tar's one stream and
+# one file at a time. A release that lists it in its manifest gets it alongside the bundle,
+# pinned to the manifest's sha256; a mirror may serve it beside the archive, and a local
+# --archive may have it beside the file. Without it, or if it cannot unpack, zstd | tar does.
+case "$target" in
+  linux-x64|linux-x64-musl) unpack_asset=hermes-slim-unpack-linux-x64 ;;
+  *) unpack_asset="hermes-slim-unpack-$target" ;;
+esac
+unpack_pids=""
+# start_unpacker SHA256: fetch it in the background; with no SHA256, fetch its .sha256 too.
+start_unpacker() {
+  if [ -z "$base" ] || [ -z "$unpack_asset" ]; then return 0; fi
+  get "$base/$unpack_asset" "$tmp/unpack" &
+  unpack_pids="$!"
+  if [ -n "$1" ]; then
+    echo "$1" >"$tmp/unpack.sha256"
+  else
+    get "$base/$unpack_asset.sha256" "$tmp/unpack.sha256" &
+    unpack_pids="$unpack_pids $!"
+  fi
+}
+# A verified unpacker in $tmp/unpack, or false. A checksum mismatch stops the install.
+have_unpacker() {
+  [ -n "$unpack_asset" ] || return 1
+  if [ -n "$base" ]; then
+    for p in $unpack_pids; do wait "$p" 2>/dev/null || true; done
+  else
+    { cp "$(dirname "$1")/$unpack_asset" "$tmp/unpack" && cp "$(dirname "$1")/$unpack_asset.sha256" "$tmp/unpack.sha256"; } 2>/dev/null || return 1
+  fi
+  [ -s "$tmp/unpack" ] && [ -s "$tmp/unpack.sha256" ] || return 1
+  [ "$(cut -d' ' -f1 "$tmp/unpack.sha256")" = "$(sha256 "$tmp/unpack")" ] ||
+    { echo "hermes-slim: $unpack_asset sha256 mismatch" >&2; exit 1; }
+  chmod +x "$tmp/unpack"
+}
 unpack() {
+  if have_unpacker "$1"; then
+    "$tmp/unpack" "$1" "$2" --strip 1 && return 0
+    echo "→ $unpack_asset could not unpack it; trying zstd and tar" >&2
+    rm -rf "$2" && mkdir "$2"
+  fi
   if command -v zstd >/dev/null 2>&1; then
     zstd -dcq "$1" | tar -xf - -C "$2" --strip-components 1
   elif [ -n "$zstd_asset" ]; then
@@ -325,13 +365,15 @@ tmp="$(mktemp -d)"
 pids=""
 trap 'rm -rf "$tmp"' EXIT
 # Ctrl-C stops the background range and helper transfers too; their bytes stay for a rerun.
-trap 'for p in $pids $helper_pids; do kill "$p" 2>/dev/null; done; exit 130' INT TERM
+trap 'for p in $pids $helper_pids $unpack_pids; do kill "$p" 2>/dev/null; done; exit 130' INT TERM
 mkdir -p "$dir/downloads"
 base=""
 expected=""
+unpack_sha=""
 case "$archive" in
   http://*|https://*)
     base="${archive%/*}"
+    start_unpacker ""
     start_helper
     # A mirror may publish no checksum (404), but one it failed to serve is an error.
     rc=0
@@ -361,6 +403,7 @@ case "$archive" in
       line="$(grep "^bundle $target hermes-slim-[^ ]*\.tar\.zst " "$tmp/manifest" | head -1)"
       asset="$(echo "$line" | cut -d' ' -f3)"
       expected="$(echo "$line" | cut -d' ' -f4)"
+      unpack_sha="$(grep "^unpack [^ ]* $unpack_asset " "$tmp/manifest" | head -1 | cut -d' ' -f4)"
     else
       # Releases from before the manifest: one API call gives the tag and the asset names.
       if [ "$version" = latest ]; then release_api="releases/latest"; else release_api="releases/tags/$version"; fi
@@ -380,7 +423,8 @@ case "$archive" in
     [ "$version" != latest ] || { echo "hermes-slim: could not read the latest release of $repo" >&2; exit 1; }
     [ -n "$asset" ] || { echo "hermes-slim: no $target bundle in release $version" >&2; exit 1; }
     base="https://github.com/$repo/releases/download/$version"
-    start_helper
+    # The unpacker replaces zstd | tar, so with it listed the zstd helper is not needed.
+    if [ -n "$unpack_sha" ]; then start_unpacker "$unpack_sha"; else start_helper; fi
     if [ -z "$expected" ]; then
       get "$base/$asset.sha256" "$tmp/$asset.sha256" ||
         { echo "hermes-slim: could not download $asset.sha256; check the connection and rerun" >&2; exit 1; }

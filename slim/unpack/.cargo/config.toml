@@ -1,0 +1,4 @@
+# The helper runs on a fresh machine before anything else in the release: link the C
+# runtime statically so it needs no Visual C++ redistributable.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

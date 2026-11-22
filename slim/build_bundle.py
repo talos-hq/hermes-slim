@@ -498,12 +498,16 @@ def package(target: str, out: Path, work: Path, host_work: Path) -> Path:
             for p in bundle.rglob("*"):
                 z.write(p, p.relative_to(work))
         write_sha256(legacy)
-    # zstd -9: about as small as xz for this tree and several times faster to unpack. Every
-    # target ships it; Windows unpacks it with the release's zstd-win32-x64.exe and tar.exe.
-    # The host Python may predate compression.zstd (3.14); the bundled one never does.
+    # zstd -9: about as small as xz for this tree and several times faster to unpack. Written
+    # as independent 8 MiB frames plus a seek table (slim/zstd_frames.py), so the release's
+    # hermes-slim-unpack decodes it on every core; any other zstd still reads it as one
+    # stream. The host Python may predate compression.zstd (3.14); the bundled one never does.
     archive = out / f"{name}.tar.zst"
-    run([python, "-c", "import sys, tarfile; t = tarfile.open(sys.argv[1], 'w:zst', level=9); "
-                       "t.add(sys.argv[2], arcname='hermes-slim'); t.close()", archive, bundle])
+    plain = work / f"{name}.tar"
+    run([python, "-c", "import sys, tarfile; t = tarfile.open(sys.argv[1], 'w'); "
+                       "t.add(sys.argv[2], arcname='hermes-slim'); t.close()", plain, bundle])
+    run([python, "-I", Path(__file__).resolve().parent / "zstd_frames.py", plain, archive])
+    plain.unlink()
     digest = write_sha256(archive)
     print(f"bundle: {archive} ({archive.stat().st_size // (1 << 20)} MiB) sha256={digest}")
     return archive

@@ -109,14 +109,27 @@ def main() -> int:
     root = Path(tempfile.mkdtemp(prefix="hermes-slim-smoke-"))
     windows = os.name == "nt"
     bundle = root / "hermes-slim"
+    # The release's parallel unpacker (slim/unpack), when this build made one: the installers
+    # use it whenever it sits beside a local archive, so the smoke test installs through them.
+    unpacker = sorted(args.archive.parent.glob("hermes-slim-unpack-*"))
+    unpacker = [u for u in unpacker if not u.name.endswith(".sha256")]
     if args.archive.suffix == ".zip":
         zipfile.ZipFile(args.archive).extractall(root)
-    elif windows:
-        # Windows has no zstd: unpack the way users do, through install.ps1 with the
-        # release's zstd-win32-x64.exe beside the archive and Windows' tar.exe.
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                        str(Path(__file__).resolve().parent / "install.ps1"), "-Archive", str(args.archive),
-                        "-Dir", str(root / "install"), "-NoSetup"], check=True, timeout=1800)
+    elif windows or unpacker:
+        # Unpack the way users do: through the installer, with the release's unpacker (or,
+        # on Windows without one, zstd-win32-x64.exe and tar.exe) beside the archive.
+        here = Path(__file__).resolve().parent
+        if windows:
+            cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(here / "install.ps1"),
+                   "-Archive", str(args.archive), "-Dir", str(root / "install"), "-NoSetup"]
+        else:
+            cmd = ["sh", str(here / "install.sh"), "--archive", str(args.archive), "--dir", str(root / "install"), "--no-setup"]
+        installed = subprocess.run(cmd, env=dict(os.environ, HOME=str(root / "install-home")),
+                                   capture_output=True, text=True, timeout=1800, check=False)
+        print(installed.stdout + installed.stderr, flush=True)
+        installed.check_returncode()
+        if unpacker and "unpacked " not in installed.stdout + installed.stderr:
+            raise SystemExit(f"{unpacker[0].name} sits beside the archive but the installer did not unpack with it")
         bundle = root / "install" / "current"
     else:
         # .tar.zst: GNU tar (with zstd on PATH) and bsdtar both pick the codec from the suffix.

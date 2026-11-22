@@ -100,6 +100,24 @@ class ManifestTests(unittest.TestCase):
         # Every download after the manifest is pinned to the tag it names.
         self.assertIn(f"https://github.com/talos-hq/hermes-slim/releases/download/{TAG}/{self.asset}", self.urls())
 
+    def test_unpacker_listed_in_the_manifest_is_fetched_pinned_to_it(self):
+        target = host_target()
+        name = f"hermes-slim-unpack-{'linux-x64' if target.startswith('linux-x64') else target}"
+        stub = '#!/bin/sh\nprintf ran > "$HOME/unpack-ran"\ntar -xf "$1" -C "$2" --strip-components 1\n'
+        (self.release / name).write_text(stub)
+        (self.release / name).chmod(0o755)
+        # No .sha256 beside it: the pin must come from the manifest.
+        lines = [" ".join(str(x) for x in row) for row in release_manifest.entries(self.release)]
+        self.assertIn(f"unpack {name.removeprefix('hermes-slim-unpack-')} {name} ", "\n".join(lines))
+        (self.release / release_manifest.MANIFEST).write_text("\n".join([f"release {TAG}", *lines]) + "\n")
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.home / "unpack-ran").exists(), "the manifest's unpacker did not unpack the bundle")
+        base = f"https://github.com/talos-hq/hermes-slim/releases/download/{TAG}"
+        self.assertIn(f"{base}/{name}", self.urls())
+        self.assertNotIn(f"{base}/{name}.sha256", self.urls())
+        self.assertFalse([u for u in self.urls() if "/zstd-" in u], "the zstd helper was fetched although the unpacker replaces it")
+
     def test_a_rate_limited_api_is_reported_as_such(self):
         result = self.install()  # this release has no manifest, so the API is the fallback
         self.assertNotEqual(result.returncode, 0)
