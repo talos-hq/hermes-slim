@@ -109,6 +109,7 @@ export interface OAuthProvider {
 }
 
 export interface OAuthProvidersResponse {
+  clud_available?: boolean
   providers: OAuthProvider[]
 }
 

@@ -320,6 +320,16 @@ export function listOAuthProviders(profile?: ProfileScope): Promise<OAuthProvide
   })
 }
 
+export function setupCludProvider(profile?: ProfileScope): Promise<{ provider: string; models: string[] }> {
+  return window.hermesDesktop.api<{ provider: string; models: string[] }>({
+    ...capabilityScoped(profile),
+    path: '/api/providers/clud/setup',
+    method: 'POST',
+    body: {},
+    timeoutMs: 130_000
+  })
+}
+
 export function disconnectOAuthProvider(
   providerId: string,
   profile?: null | string

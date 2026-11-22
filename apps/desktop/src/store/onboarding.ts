@@ -11,6 +11,7 @@ import {
   pollOAuthSession,
   type ProfileScope,
   setEnvVar,
+  setupCludProvider,
   startOAuthLogin,
   submitOAuthCode,
   validateProviderCredential
@@ -90,6 +91,7 @@ export interface DesktopOnboardingState {
   flow: OnboardingFlow
   mode: OnboardingMode
   providers: null | OAuthProvider[]
+  cludAvailable?: boolean
   reason: null | string
   requested: boolean
   /** True when the user explicitly chose "I'll choose a provider later" on the
@@ -637,19 +639,23 @@ async function refreshProviders() {
   const generation = flowGeneration
   providersRefreshPromise = (async () => {
     try {
-      const { providers } = await listOAuthProviders($desktopOnboarding.get().targetScope)
+      const { providers, clud_available } = await listOAuthProviders($desktopOnboarding.get().targetScope)
 
       if (generation !== flowGeneration) {
         return
       }
 
-      patch({ mode: providers.length > 0 ? 'oauth' : 'apikey', providers })
+      patch({
+        mode: providers.length > 0 || clud_available ? 'oauth' : 'apikey',
+        providers,
+        cludAvailable: clud_available
+      })
     } catch {
       if (generation !== flowGeneration) {
         return
       }
 
-      patch({ mode: 'apikey', providers: [] })
+      patch({ mode: 'apikey', providers: [], cludAvailable: undefined })
     } finally {
       if (generation === flowGeneration) {
         providersRefreshPromise = null
@@ -1237,6 +1243,47 @@ export async function recheckExternalSignin(ctx: OnboardingContext) {
   )
 }
 
+export async function startCludOnboarding(ctx: OnboardingContext) {
+  ctx = captureContext(ctx)
+  const generation = flowGeneration
+  flowScope = ctx.scope
+  const label = translateNow('onboarding.cludTitle')
+
+  setFlow({
+    status: 'starting',
+    provider: {
+      id: 'clud-codex',
+      name: label,
+      flow: 'external',
+      cli_command: 'clud serve --codex',
+      docs_url: 'https://talos-hq.github.io/clud/install/index.html',
+      status: { logged_in: false }
+    }
+  })
+
+  try {
+    const { provider, models } = await setupCludProvider(ctx.scope)
+
+    if (generation !== flowGeneration) {
+      return
+    }
+
+    if (!$desktopOnboarding.get().manual) {
+      await setMainModelAssignment({ provider, model: models[0] }, ctx.scope, { skipConfirmPrompt: true })
+    }
+
+    if (generation !== flowGeneration) {
+      return
+    }
+
+    setFlow({ status: 'confirming_model', providerSlug: provider, currentModel: models[0], label, saving: false })
+  } catch (error) {
+    if (generation === flowGeneration) {
+      setFlow({ status: 'error', message: errMessage(error) })
+    }
+  }
+}
+
 export async function saveOnboardingApiKey(
   envKey: string,
   value: string,
@@ -1510,9 +1557,11 @@ export async function confirmOnboardingModel(ctx: OnboardingContext) {
     // this file's non-blocking gateway calls. The alternative (silently
     // keeping the previous default) is still safer than the bug this fixes.
     try {
-      const res = await setMainModelAssignment({ provider: flow.providerSlug, model: flow.currentModel }, undefined, {
-        skipConfirmPrompt: true
-      })
+      const res = await setMainModelAssignment(
+        { provider: flow.providerSlug, model: flow.currentModel },
+        flowScope ?? ctx.scope ?? $desktopOnboarding.get().targetScope,
+        { skipConfirmPrompt: true }
+      )
 
       notifyGatewayTools(res.gateway_tools)
     } catch (error) {

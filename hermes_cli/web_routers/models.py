@@ -425,3 +425,19 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
                         reasoning_effort=reasoning_effort, prepared=prepared)
 
         return await asyncio.to_thread(_apply_assignment)
+
+
+@router.post("/api/providers/clud/setup")
+async def setup_clud_provider(profile: Optional[str] = None):
+    """Configure Codex via clud for the requesting profile, then live-probe its models."""
+    from hermes_cli.setup_clud import configure_clud_codex
+
+    def _configure():
+        with _config_profile_scope(profile):
+            require_readable_config_before_write()
+            try:
+                return configure_clud_codex()
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return await run_in_threadpool(_configure)

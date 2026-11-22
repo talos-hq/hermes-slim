@@ -24,6 +24,8 @@ import {
 // Onboarding's due check answered "not due": first-run surfaces are free to show.
 markOnboardingDecided()
 
+afterEach(() => notifications.clearNotifications())
+
 const NOT_CONNECTED =
   'Hermes is not connected to any AI provider yet. Run `hermes model` to pick one, or `hermes auth add <provider>`.'
 

@@ -20,6 +20,9 @@ export const zhOnboarding: TranslationOverrides['onboarding'] = {
   localModelsTitle: '本地运行模型',
   localModelsPitch: '无需账号——下载模型，在本机运行',
   openRouterPitch: '一个密钥，数百个模型 — 稳妥的默认选择',
+  cludTitle: '通过 clud 使用 Codex 订阅',
+  cludPitch: '使用 ChatGPT 订阅 — 启动 clud serve --codex 以连接',
+  cludInstallHint: '安装 clud：https://talos-hq.github.io/clud/install/index.html',
   apiKeyOptions: {
     fireworks: { short: '直接模型 API', description: '直接访问 Fireworks AI 托管的模型。' },
     openrouter: { short: '一个密钥，多个模型', description: '用一个密钥访问数百个模型。适合新安装的默认选择。' },

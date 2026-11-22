@@ -18,6 +18,9 @@ export const ruOnboarding: TranslationOverrides['onboarding'] = {
   featuredPitch: 'Одна подписка, 300+ передовых моделей — рекомендуемый способ запускать Hermes',
   fireworksPitch: 'Прямой API моделей — передовые модели на хостинге Fireworks',
   openRouterPitch: 'Один ключ, сотни моделей — надёжный вариант по умолчанию',
+  cludTitle: 'Подписка Codex через clud',
+  cludPitch: 'Используйте подписку ChatGPT — запустите clud serve --codex',
+  cludInstallHint: 'Установите clud: https://talos-hq.github.io/clud/install/index.html',
   apiKeyOptions: {
     fireworks: {
       short: 'прямой API моделей',

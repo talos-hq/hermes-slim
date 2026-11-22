@@ -80,6 +80,15 @@ describe('onboarding Picker', () => {
     expect(screen.queryByText('Recommended')).toBeNull()
   })
 
+  it.each([true, false])('only offers Codex via clud when available=%s', available => {
+    setProviders([makeOAuthProvider('nous', 'Nous Portal')])
+    $desktopOnboarding.set({ ...$desktopOnboarding.get(), cludAvailable: available })
+    render(<Picker ctx={ctx} />)
+
+    expect(Boolean(screen.queryByRole('button', { name: /Codex subscription via clud/ }))).toBe(available)
+    expect(Boolean(screen.queryByText(/Install clud:/))).toBe(!available)
+  })
+
   it('offers "choose later" on first run and persists the skip', () => {
     setProviders([makeOAuthProvider('nous', 'Nous Portal')])
     render(<Picker ctx={ctx} />)

@@ -731,7 +731,8 @@ async def list_oauth_providers(profile: Optional[str] = None):
                 "disconnect_command": _oauth_provider_disconnect_command(p),
                 "disconnectable": disconnect_hint is None, "status": status,
             })
-        return {"providers": providers}
+        from hermes_cli.setup_clud import clud_available
+        return {"providers": providers, "clud_available": clud_available()}
 
     return await scoped_to_thread(profile, _run)
 

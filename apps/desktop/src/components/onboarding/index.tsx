@@ -33,6 +33,7 @@ import {
   refreshOnboarding,
   saveOnboardingApiKey,
   setOnboardingMode,
+  startCludOnboarding,
   startManualOnboarding,
   startProviderOAuth
 } from '@/store/onboarding'
@@ -43,6 +44,7 @@ import { DocsLink, FlowPanel, Status } from './flow'
 import { FreeTierSetupNotice } from './free-tier-setup-notice'
 import { DecodedLabel } from './glyph'
 import {
+  CludProviderRow,
   FeaturedProviderRow,
   FireworksProviderRow,
   LocalModelsProviderRow,
@@ -620,7 +622,7 @@ const persistShowAll = (value: boolean) => {
 
 export function Picker({ ctx }: { ctx: OnboardingContext }) {
   const { t } = useI18n()
-  const { localEndpoint, manual, mode, providers } = useStore($desktopOnboarding)
+  const { cludAvailable, localEndpoint, manual, mode, providers } = useStore($desktopOnboarding)
   const [showAll, setShowAll] = useState(readShowAll)
   // Which key-form option to preselect when we flip to 'apikey' mode. The
   // OpenRouter row selects its key; the generic link lands on the first option.
@@ -641,18 +643,23 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
   // and hides the "back to sign in" link since the user came specifically to
   // configure a custom endpoint. A list still loading (null) is not "no OAuth
   // providers": it waits below instead of flashing the key form.
-  if (localEndpoint || mode === 'apikey' || (providers !== null && !hasOauth)) {
+  if (localEndpoint || mode === 'apikey' || (providers !== null && !hasOauth && !cludAvailable)) {
     return (
-      <KeyFormStep
-        apiKeyOptions={apiKeyOptions}
-        ctx={ctx}
-        hasOauth={hasOauth}
-        initialEnvKey={apiKeyInitialEnv}
-        localEndpoint={localEndpoint}
-        manual={manual}
-        onSelect={select}
-        providers={ordered}
-      />
+      <div className="grid gap-2">
+        {!localEndpoint ? (
+          <CludProviderRow available={cludAvailable} onClick={() => void startCludOnboarding(ctx)} />
+        ) : null}
+        <KeyFormStep
+          apiKeyOptions={apiKeyOptions}
+          ctx={ctx}
+          hasOauth={hasOauth}
+          initialEnvKey={apiKeyInitialEnv}
+          localEndpoint={localEndpoint}
+          manual={manual}
+          onSelect={select}
+          providers={ordered}
+        />
+      </div>
     )
   }
 
@@ -688,6 +695,7 @@ export function Picker({ ctx }: { ctx: OnboardingContext }) {
     <div className="grid gap-2">
       <div className="grid max-h-[60dvh] gap-2 overflow-y-auto p-1">
         {featured ? <FeaturedProviderRow onSelect={select} provider={featured} /> : null}
+        <CludProviderRow available={cludAvailable} onClick={() => void startCludOnboarding(ctx)} />
         {/* The no-account path: everything runs on this machine. Shipped
             behind the --local launch flag. (Fireworks moved into the
             expanded list on main.) */}
