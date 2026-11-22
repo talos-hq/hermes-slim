@@ -25,7 +25,7 @@ or an open model on a local OpenAI-compatible endpoint. There is no
 Anthropic-native schema to learn.
 
 Hermes drives [Talos HQ Computer Use](https://github.com/talos-hq/computer-use).
-Hermes Slim bundles the driver on supported macOS, Windows and glibc Linux targets.
+Hermes Slim bundles the driver on macOS, Windows and Linux with glibc 2.34 or newer.
 Use `terminal` to run `hermes computer-use doctor` for setup diagnostics.
 After upgrading from the upstream driver on macOS, grant access to
 ComputerUse in Privacy & Security and rerun the doctor.
