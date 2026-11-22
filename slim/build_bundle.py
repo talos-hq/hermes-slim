@@ -456,6 +456,15 @@ def stage(target: str, wheels: Path | None, work: Path, host_work: Path) -> Path
     return bundle
 
 
+def catalog_entry(rel: Path) -> str:
+    """One line of the signing catalog. azure/artifact-signing-action's ArtifactSigning
+    module (Get-CatalogFileList) resolves each line with Resolve-Path, which reads
+    PowerShell wildcards: PortableGit's usr\\bin\\[.exe failed the whole signing step with
+    "The specified wildcard character pattern is not valid". A backtick escapes them,
+    as [WildcardPattern]::Escape does, and the module then holds the literal path."""
+    return "".join(f"`{c}" if c in "`[]*?" else c for c in str(rel))
+
+
 def write_unsigned_list(bundle: Path, work: Path) -> None:
     """Smart App Control runs only signed binaries, wheels' .pyd/.dll included. List what
     the bundle ships unsigned; CI signs exactly these (Authenticode) before package()."""
@@ -464,7 +473,7 @@ def write_unsigned_list(bundle: Path, work: Path) -> None:
 
     signed, unsigned = scan(bundle)
     # The signing action resolves each catalog line against the catalog's own folder.
-    (work / "unsigned.txt").write_text("".join(f"{p.relative_to(work)}\n" for p in unsigned))
+    (work / "unsigned.txt").write_text("".join(f"{catalog_entry(p.relative_to(work))}\n" for p in unsigned))
     print(f"{len(signed)} binaries signed upstream, {len(unsigned)} to sign: {work / 'unsigned.txt'}", flush=True)
 
 
