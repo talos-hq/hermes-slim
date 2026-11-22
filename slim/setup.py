@@ -143,7 +143,7 @@ def write_config(first: str, last: str, key: str, model: str, api_port: int) -> 
 
 def prepare_computer_use(interactive: bool) -> dict:
     """Make the baked-in computer use ready now rather than on first use: validate the bundled
-    cua-driver and do the host setup (macOS: register CuaDriver.app and, when interactive, ask once
+    cua-driver and do the host setup (macOS: register ComputerUse.app and, when interactive, ask once
     for Accessibility + Screen Recording). Never fatal: a host that cannot run the driver (no
     display libraries, or a musl bundle with no driver) still gets a working Hermes, and the
     computer-use skill tells the agent how to repair it (`hermes computer-use install`)."""

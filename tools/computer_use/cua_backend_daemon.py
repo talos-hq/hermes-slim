@@ -1,4 +1,4 @@
-"""Private embedded cua-driver daemon for non-standard permission modes, plus the macOS CuaDriver.app identity
+"""Private embedded cua-driver daemon for non-standard permission modes, plus the macOS ComputerUse.app identity
 checks its launch path depends on. Config/policy helpers are looked up lazily through the facade."""
 
 from __future__ import annotations
@@ -24,8 +24,10 @@ logger = logging.getLogger("tools.computer_use.cua_backend")
 
 # The only bundle identity the private daemon may launch through, and the teams that sign official
 # releases. Exact matches only: a suffixed identifier or other team is an impostor.
-_CUA_DRIVER_BUNDLE_ID = CUA_DRIVER_BUNDLE_ID
-_CUA_DRIVER_TEAM_IDS = ("4YEC26S9KF", "YCK386LBJ7")
+_CUA_DRIVER_SIGNERS = {
+    CUA_DRIVER_BUNDLE_ID: ("NCFFSNX26D",),
+    "com.trycua.driver": ("4YEC26S9KF", "YCK386LBJ7"),
+}
 _QUIET_ERRORS = (OSError, subprocess.SubprocessError)
 
 def _cb():
@@ -34,7 +36,7 @@ def _cb():
     return cua_backend
 
 def _resolve_cua_driver_app_path(driver_cmd: str) -> Optional[str]:
-    """Return the CuaDriver.app bundle that CARRIES *driver_cmd*, if any. Derived from the resolved binary path
+    """Return the ComputerUse.app bundle that CARRIES *driver_cmd*, if any. Derived from the resolved binary path
     only — no /Applications fallback, which could be a DIFFERENT install than the one the manifest resolved,
     running code the resolution chain never validated."""
     head, marker, _ = os.path.realpath(driver_cmd).partition(".app/Contents/MacOS/")
@@ -42,29 +44,30 @@ def _resolve_cua_driver_app_path(driver_cmd: str) -> Optional[str]:
     return head + ".app" if marker and os.path.isfile(executable) and os.access(executable, os.X_OK) else None
 
 def _validate_cua_driver_app_signature(app_path: str) -> None:
-    """Fail closed unless *app_path* is the genuinely-signed CuaDriver.app. ``/usr/bin/open`` hands LaunchServices
-    whatever bundle sits at the path, so ``codesign -dv`` must report EXACTLY ``Identifier=com.trycua.driver`` and
+    """Fail closed unless *app_path* is the genuinely-signed ComputerUse.app. ``/usr/bin/open`` hands LaunchServices
+    whatever bundle sits at the path, so ``codesign -dv`` must report EXACTLY ``Identifier=com.taloshq.computer-use`` and
     an expected TeamIdentifier. ``TeamIdentifier=not set`` (ad-hoc dev builds) is allowed only with
     ``computer_use.allow_unsigned_driver: true``. Raises RuntimeError on any mismatch or when codesign is
     unavailable/fails."""
     codesign = shutil.which("codesign")
     if not codesign:
-        raise RuntimeError("codesign is required to verify CuaDriver.app before launching it.")
+        raise RuntimeError("codesign is required to verify ComputerUse.app before launching it.")
     try:
         proc = _cb()._run_quiet([codesign, "-dv", app_path], timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"could not verify CuaDriver.app signature: {exc}") from exc
+        raise RuntimeError(f"could not verify ComputerUse.app signature: {exc}") from exc
     if proc.returncode != 0:
-        raise RuntimeError(f"CuaDriver.app at {app_path} is not code-signed; refusing to launch it ({(proc.stderr or '').strip()})")
+        raise RuntimeError(f"ComputerUse.app at {app_path} is not code-signed; refusing to launch it ({(proc.stderr or '').strip()})")
     parts = [line.partition("=") for line in (proc.stderr or "").splitlines()]  # codesign -dv reports on stderr
     fields = {k.strip(): v.strip() for k, sep, v in reversed(parts) if sep}  # first occurrence of a key wins
     identifier, team = fields.get("Identifier", ""), fields.get("TeamIdentifier", "")
-    if identifier != _CUA_DRIVER_BUNDLE_ID:
-        raise RuntimeError(f"CuaDriver.app at {app_path} has identifier {identifier!r}, expected {_CUA_DRIVER_BUNDLE_ID!r}; "
+    if identifier not in _CUA_DRIVER_SIGNERS:
+        raise RuntimeError(f"ComputerUse.app at {app_path} has identifier {identifier!r}, expected {CUA_DRIVER_BUNDLE_ID!r}; "
                            "refusing to launch it.")
-    if team in _CUA_DRIVER_TEAM_IDS or (team in ("", "not set") and _cb()._computer_use_cfg().get("allow_unsigned_driver") is True):
+    expected_teams = _CUA_DRIVER_SIGNERS[identifier]
+    if team in expected_teams or (team in ("", "not set") and _cb()._computer_use_cfg().get("allow_unsigned_driver") is True):
         return
-    raise RuntimeError(f"CuaDriver.app at {app_path} is signed by team {team!r}, expected one of {_CUA_DRIVER_TEAM_IDS!r}; "
+    raise RuntimeError(f"ComputerUse.app at {app_path} is signed by team {team!r}, expected one of {expected_teams!r}; "
                        "refusing to launch it. (Set computer_use.allow_unsigned_driver: true in config.yaml only for "
                        "local unsigned driver builds.)")
 
@@ -75,7 +78,7 @@ def _embedded_daemon_spawn_command(driver_cmd: str, serve_args: list[str], *, pl
         return [driver_cmd, *serve_args]
     resolved_app = app_path or _resolve_cua_driver_app_path(driver_cmd)
     if not resolved_app:
-        raise RuntimeError("CuaDriver.app is required for private computer-use sessions on macOS. Run `hermes computer-use install` to restore it.")
+        raise RuntimeError("ComputerUse.app is required for private computer-use sessions on macOS. Run `hermes computer-use install` to restore it.")
     _validate_cua_driver_app_signature(resolved_app)
     return ["/usr/bin/open", "-n", "-g", "-a", resolved_app, "--args", *serve_args]
 
@@ -96,7 +99,7 @@ class _EmbeddedCuaDaemon:
     """Private daemon for a non-standard permission mode. cua-driver's permission mode is immutable after daemon
     startup, so reusing the machine-wide daemon would let one Hermes session's YOLO choice affect another. A
     private daemon gives the session its own socket, runtime and launch-time authorization; on macOS it is
-    launched through CuaDriver.app so TCC stays attached to ``com.trycua.driver``. ``unrestricted`` = explicit
+    launched through ComputerUse.app so TCC stays attached to ``com.taloshq.computer-use``. ``unrestricted`` = explicit
     Hermes YOLO (``--dangerously-bypass-approvals``); ``bounded`` = a user-reviewed capability manifest approved
     at launch is the authorization boundary, not a runtime prompt. The manifest is a ceiling, not a mode: it "can
     narrow a profile but never widen it", so a configured v3 manifest is forwarded even for ``unrestricted``

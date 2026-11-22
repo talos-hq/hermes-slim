@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import subprocess
 
+from types import SimpleNamespace
+
 import pytest
 
 from tools.computer_use import cua_backend
@@ -177,3 +179,19 @@ def test_embedded_spawn_resolves_shim_and_accepts_current_team(monkeypatch):
         "--socket",
         "/tmp/private.sock",
     ]
+
+
+def test_talos_bundle_requires_its_own_signing_team(monkeypatch):
+    app = "/Applications/ComputerUse.app"
+    monkeypatch.setattr(cua_backend_daemon.shutil, "which", lambda _: "/usr/bin/codesign")
+
+    def verify(team):
+        return SimpleNamespace(
+            returncode=0, stderr=f"Identifier=com.taloshq.computer-use\nTeamIdentifier={team}\n"
+        )
+
+    monkeypatch.setattr(cua_backend, "_run_quiet", lambda *args, **kwargs: verify("NCFFSNX26D"))
+    cua_backend_daemon._validate_cua_driver_app_signature(app)
+    monkeypatch.setattr(cua_backend, "_run_quiet", lambda *args, **kwargs: verify("4YEC26S9KF"))
+    with pytest.raises(RuntimeError, match="NCFFSNX26D"):
+        cua_backend_daemon._validate_cua_driver_app_signature(app)

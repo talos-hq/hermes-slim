@@ -180,16 +180,16 @@ def build_computer_use_parser(subparsers) -> None:
     computer_use_perms = computer_use_sub.add_parser(
         "permissions", help="Check or grant macOS Accessibility + Screen Recording (macOS)",
         description="Computer Use drives the Mac through cua-driver, whose TCC grants\n"
-            "attach to cua-driver's own identity (com.trycua.driver) — not the\n"
+            "attach to cua-driver's own identity (com.taloshq.computer-use) — not the\n"
             "terminal or the Hermes app. `status` reports the driver's grant\n"
-            "state; `grant` launches CuaDriver via LaunchServices so the macOS\n"
+            "state; `grant` launches ComputerUse via LaunchServices so the macOS\n"
             "permission dialog is attributed to the process that does the work.")
     computer_use_perms_sub = computer_use_perms.add_subparsers(dest="computer_use_perms_action")
     computer_use_perms_status = computer_use_perms_sub.add_parser(
         "status", help="Report Accessibility + Screen Recording grant state (read-only)")
     add_json_flag(computer_use_perms_status, "Emit the normalized permission payload as JSON.")
     computer_use_perms_sub.add_parser(
-        "grant", help="Request the grants (opens the dialog attributed to CuaDriver)")
+        "grant", help="Request the grants (opens the dialog attributed to ComputerUse)")
     _perms_actions = {"grant": _cu_perms_grant, "status": _cu_perms_status}
 
     from hermes_cli.subcommands.computer_use_screen import build_screen_parser

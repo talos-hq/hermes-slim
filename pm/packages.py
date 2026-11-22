@@ -953,8 +953,8 @@ class CuaDriver(BinaryPackage):
     gaps = {**{target: "cua-driver does not publish a musl build" for target in MUSL_TARGETS},
             "linux-arm64-bionic": "cua-driver does not publish an Android build"}
     binary_rel = {
-        "darwin-arm64": "CuaDriver.app/Contents/MacOS/cua-driver",
-        "darwin-x64": "CuaDriver.app/Contents/MacOS/cua-driver",
+        "darwin-arm64": "ComputerUse.app/Contents/MacOS/cua-driver",
+        "darwin-x64": "ComputerUse.app/Contents/MacOS/cua-driver",
         "win32": "cua-driver.exe",
         "posix": "cua-driver",
     }
@@ -964,28 +964,21 @@ class CuaDriver(BinaryPackage):
             "darwin-x64": "darwin-universal",
             "darwin-arm64": "darwin-universal",
             "linux-x64": "linux-x86_64",
-            "linux-arm64": "linux-arm64",
+            "linux-arm64": "linux-aarch64",
             "win32-x64": "windows-x86_64",
-            "win32-arm64": "windows-arm64",
+            "win32-arm64": "windows-aarch64",
         }[target]
         ext = "zip" if target.startswith("win32") else "tar.gz"
-        # Only the directory archive contains the signed macOS app identity
-        # needed by TCC and private sessions. Other targets' binary archives
-        # already carry their runtime helpers (including Windows UIAccess).
-        variant = "" if target.startswith("darwin") else "-binary"
         return (
-            f"https://github.com/trycua/cua/releases/download/cua-driver-rs-v{version}/"
-            f"cua-driver-rs-{version}-{arch}{variant}.{ext}"
+            f"https://github.com/talos-hq/computer-use/releases/download/computer-use-v{version}/"
+            f"computer-use-{version}-{arch}.{ext}"
         )
 
     def latest_versions(self, target: str, locked=None) -> list[str]:
-        return github_release_tags("trycua/cua", strip_prefix="cua-driver-rs-v")
+        return github_release_tags("talos-hq/computer-use", strip_prefix="computer-use-v")
 
     def stage(self, store: Store, staged: Path, version: str, target: str) -> None:
         flatten_single_dir(staged)
-        sdk = staged / "sdk"
-        if sdk.is_dir():
-            shutil.rmtree(sdk, ignore_errors=True)
 
     def _probe_env(self) -> dict:
         """The probe IS a first run: it must not mint telemetry state."""

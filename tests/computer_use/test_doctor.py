@@ -414,6 +414,6 @@ def test_failed_tcc_row_from_health_report_names_the_stale_row_reset_for_that_se
     checks = {c["name"]: c for c in json.loads(out.getvalue())["checks"]}
 
     assert checks["tcc_screen_recording"]["hint"].startswith("Grant it in System Settings.")
-    assert "tccutil reset ScreenCapture com.trycua.driver" in checks["tcc_screen_recording"]["hint"]
+    assert "tccutil reset ScreenCapture com.taloshq.computer-use" in checks["tcc_screen_recording"]["hint"]
     assert "reset Accessibility" not in checks["tcc_screen_recording"]["hint"]
     assert "tccutil" not in checks["tcc_accessibility"].get("hint", "")

@@ -195,6 +195,10 @@ jobs:
         env:
           SIGNED: ${{ steps.macsign.outputs.sign }}
         run: |
+          app="$RUNNER_TEMP/hs-work/hermes-slim/tools/cua-driver/ComputerUse.app"
+          codesign --verify --strict "$app"
+          codesign -dv "$app" 2>&1 | grep -Fx 'TeamIdentifier=NCFFSNX26D'
+          xcrun stapler validate "$app"
           if ! python3 slim/macho_signatures.py "$RUNNER_TEMP/hs-work/hermes-slim" --list --fail-unsigned ||
              ! python3 slim/macho_signatures.py dist/hermes-slim-unpack-${{ matrix.target }} --list --fail-unsigned; then
             [ "$SIGNED" != true ] || { echo "::error::Mach-O binaries left without a Developer ID signature"; exit 1; }
@@ -260,6 +264,14 @@ jobs:
         if: startsWith(matrix.target, 'win32-')
         shell: pwsh
         run: |
+          $driver = "$env:RUNNER_TEMP/hs-work/hermes-slim/tools/cua-driver"
+          $original = Join-Path $driver computer-use.exe
+          $alias = Join-Path $driver cua-driver.exe
+          if ((Get-AuthenticodeSignature $original).Status -ne 'Valid' -or
+              (Get-AuthenticodeSignature $alias).Status -ne 'Valid' -or
+              (Get-FileHash $original).Hash -ne (Get-FileHash $alias).Hash) {
+            throw 'Bundled Computer Use executables must be signed identical copies'
+          }
           $bad = Get-ChildItem -Recurse -File "$env:RUNNER_TEMP/hs-work/hermes-slim", "$env:RUNNER_TEMP/hs-work/helper" -Include *.exe,*.dll,*.pyd |
             Get-AuthenticodeSignature | Where-Object Status -ne 'Valid'
           $bad | ForEach-Object { Write-Host "$($_.Status)  $($_.Path)" }
