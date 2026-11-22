@@ -111,20 +111,25 @@ jobs:
         if: matrix.target == 'linux-x64-musl' || startsWith(matrix.target, 'darwin-')
         run: sh slim/build_zstd.sh dist
       # hermes-slim-unpack (slim/unpack): the installers' parallel unpacker, built natively per
-      # macOS/Windows leg before signing, so it is signed (and notarized) with the bundle.
+      # leg before signing, so it is signed (and notarized) with the bundle. Linux builds are
+      # static musl binaries from the glibc legs; the Alpine bundle uses linux-x64's.
       - name: Set up soldr
-        if: startsWith(matrix.target, 'darwin-') || startsWith(matrix.target, 'win32-')
+        if: ${{ !matrix.container }}
         uses: forge-ci/setup-soldr@271d19234f51ed1a908ee6ecdd721a75dff1dbb6 # v0
         env:
           SOLDR_GITHUB_TOKEN: ${{ github.token }}
       - name: Build hermes-slim-unpack
-        if: startsWith(matrix.target, 'darwin-') || startsWith(matrix.target, 'win32-')
+        if: ${{ !matrix.container }}
         run: |
           target="${{ matrix.target }}"
           case "$target" in
             win32-*)
               out="$RUNNER_TEMP/hs-work/helper"
               printf 'helper\\hermes-slim-unpack-%s.exe\n' "$target" >> "$RUNNER_TEMP/hs-work/unsigned.txt" ;;
+            linux-*)
+              # zstd's C sources need a musl C compiler for the static build.
+              sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools
+              out=dist ;;
             *) out=dist ;;
           esac
           ${{ steps.py.outputs.bin }} slim/build_unpack.py "$target" "$out"
@@ -284,12 +289,13 @@ jobs:
           (cd dist && sha256sum "$u" > "$u.sha256")
       # Informational: the runner's real filesystem and antivirus, old unpack against new.
       - name: Unpack timing
-        if: startsWith(matrix.target, 'darwin-') || startsWith(matrix.target, 'win32-')
+        if: ${{ !matrix.container }}
         run: |
           for archive in dist/hermes-slim-*-${{ matrix.target }}.tar.zst; do :; done
           unpacker=dist/hermes-slim-unpack-${{ matrix.target }}
           [ -f "$unpacker" ] || unpacker="$unpacker.exe"
           zstd="$RUNNER_TEMP/hs-work/helper/zstd-win32-x64.exe"; [ -f "$zstd" ] || zstd="dist/zstd-${{ matrix.target }}"
+          [ -f "$zstd" ] || zstd=zstd
           chmod +x "$zstd" "$unpacker" 2>/dev/null || true
           ${{ steps.py.outputs.bin }} slim/bench_unpack.py "$archive" "$unpacker" --zstd "$zstd"
       # A private X display for the smoke test's computer-use step (list_windows + a screenshot through

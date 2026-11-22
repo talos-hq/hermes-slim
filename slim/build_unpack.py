@@ -7,6 +7,8 @@ Writes OUT_DIR/hermes-slim-unpack-TARGET (.exe on Windows) and its .sha256. CI s
 with the bundle (Developer ID + notarization on macOS, Authenticode on Windows) and records
 the .sha256 again, so the checksum the installers check describes the signed bytes. macOS builds
 target macOS 11 like slim/build_zstd.sh, so the helper runs on every Mac the bundle does.
+Linux builds are static musl binaries (linux-x64 serves the glibc and musl bundles alike);
+they need a musl C compiler for zstd's C sources (`musl-gcc`, Debian/Ubuntu: musl-tools).
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ TRIPLES = {
     "darwin-x64": "x86_64-apple-darwin",
     "win32-x64": "x86_64-pc-windows-msvc",
     "win32-arm64": "aarch64-pc-windows-msvc",
+    # Static musl: one binary per arch runs on glibc and musl (Alpine) distributions alike.
+    "linux-x64": "x86_64-unknown-linux-musl",
+    "linux-arm64": "aarch64-unknown-linux-musl",
 }
 MACOS_MIN = "11.0"
 
@@ -55,6 +60,10 @@ def main() -> int:
     shutil.copyfile(built, dest)
     dest.chmod(0o755)
     print(subprocess.run([str(dest), "--version"], capture_output=True, text=True, check=True, timeout=60).stdout.strip())
+    if target.startswith("linux-"):
+        linked = subprocess.run(["file", "-L", str(dest)], capture_output=True, text=True, check=True, timeout=60).stdout
+        if "statically linked" not in linked and "static-pie linked" not in linked:
+            raise SystemExit(f"{dest.name} is not static: {linked.strip()}")
     if target.startswith("darwin-"):
         minos = macos_minimum(dest)
         if minos != MACOS_MIN:
