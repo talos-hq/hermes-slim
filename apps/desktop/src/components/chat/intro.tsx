@@ -3,8 +3,8 @@ import { useState } from 'react'
 import { useI18n } from '@/i18n'
 import { capitalize, normalize } from '@/lib/text'
 
+import heroArtwork from './hermes-slim-hero.jpg'
 import introCopyJsonl from './intro-copy.jsonl?raw'
-import { Wordmark } from './wordmark'
 
 type IntroCopy = {
   headline: string
@@ -146,8 +146,6 @@ function pickCopy(copies: IntroCopy[], seed = 0): IntroCopy {
   return copies[Math.abs(seed) % copies.length] || FALLBACK_COPY[0]
 }
 
-const WORDMARK = 'HERMES AGENT'
-
 function resolveCopy(personality?: string, seed?: number): IntroCopy {
   const personalityKey = normalizeKey(personality)
 
@@ -172,13 +170,23 @@ export function Intro({ personality, seed }: IntroProps) {
 
   return (
     <div
-      className="pointer-events-none flex w-full min-w-0 flex-col items-center justify-center px-0.5 py-6 text-center text-muted-foreground sm:px-6 lg:px-8"
+      className="@container pointer-events-none w-full min-w-0 px-4 py-6 text-muted-foreground sm:px-6 lg:px-8"
       data-slot="aui_intro"
     >
-      <div className="w-full min-w-0">
-        <Wordmark className="mb-1" text={WORDMARK} />
-
-        <p className="m-0 text-center leading-normal tracking-tight">{body}</p>
+      <div className="mx-auto flex max-w-3xl flex-col items-center gap-5 text-center @lg:flex-row @lg:gap-8 @lg:text-left">
+        <img
+          alt="A woman wearing headphones and a visor reflecting a city"
+          className="w-[min(60%,24vh,12rem)] shrink-0 rounded-[22%] @lg:w-[min(42%,42vh,24rem)]"
+          height={512}
+          src={heroArtwork}
+          width={512}
+        />
+        <div className="min-w-0">
+          <h1 className="m-0 mb-2 text-[clamp(1.5rem,7cqw,3.75rem)] leading-none font-bold tracking-tight text-foreground">
+            Hermes-Slim
+          </h1>
+          <p className="m-0 leading-normal tracking-tight">{body}</p>
+        </div>
       </div>
     </div>
   )
