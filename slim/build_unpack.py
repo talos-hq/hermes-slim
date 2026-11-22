@@ -7,8 +7,9 @@ Writes OUT_DIR/hermes-slim-unpack-TARGET (.exe on Windows) and its .sha256. CI s
 with the bundle (Developer ID + notarization on macOS, Authenticode on Windows) and records
 the .sha256 again, so the checksum the installers check describes the signed bytes. macOS builds
 target macOS 11 like slim/build_zstd.sh, so the helper runs on every Mac the bundle does.
-Linux builds are static musl binaries (linux-x64 serves the glibc and musl bundles alike);
-they need a musl C compiler for zstd's C sources (`musl-gcc`, Debian/Ubuntu: musl-tools).
+Linux builds are static musl binaries (linux-x64 serves the glibc and musl bundles alike),
+both built on an x86_64 host: soldr's musl toolchain runs only there. The arm64 one is
+checked under qemu-user (qemu-aarch64-static).
 """
 
 from __future__ import annotations
@@ -61,7 +62,9 @@ def main() -> int:
     dest = out / asset_name(target)
     shutil.copyfile(built, dest)
     dest.chmod(0o755)
-    print(subprocess.run([str(dest), "--version"], capture_output=True, text=True, check=True, timeout=60).stdout.strip())
+    # A cross-built Linux arm64 binary runs under qemu-user on an x86_64 host.
+    runner = ["qemu-aarch64-static"] if target == "linux-arm64" and platform.machine() != "aarch64" else []
+    print(subprocess.run([*runner, str(dest), "--version"], capture_output=True, text=True, check=True, timeout=60).stdout.strip())
     if target.startswith("linux-"):
         linked = subprocess.run(["file", "-L", str(dest)], capture_output=True, text=True, check=True, timeout=60).stdout
         if "statically linked" not in linked and "static-pie linked" not in linked:

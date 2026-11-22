@@ -112,14 +112,15 @@ jobs:
         run: sh slim/build_zstd.sh dist
       # hermes-slim-unpack (slim/unpack): the installers' parallel unpacker, built natively per
       # leg before signing, so it is signed (and notarized) with the bundle. Linux builds are
-      # static musl binaries from the glibc legs; the Alpine bundle uses linux-x64's.
+      # static musl binaries, both cross-built on linux-x64 (soldr's musl toolchain runs only
+      # on x86_64 hosts); the Alpine bundle uses linux-x64's.
       - name: Set up soldr
-        if: ${{ !matrix.container }}
+        if: ${{ !matrix.container && matrix.target != 'linux-arm64' }}
         uses: forge-ci/setup-soldr@271d19234f51ed1a908ee6ecdd721a75dff1dbb6 # v0
         env:
           SOLDR_GITHUB_TOKEN: ${{ github.token }}
       - name: Build hermes-slim-unpack
-        if: ${{ !matrix.container }}
+        if: ${{ !matrix.container && matrix.target != 'linux-arm64' }}
         run: |
           target="${{ matrix.target }}"
           case "$target" in
@@ -127,8 +128,9 @@ jobs:
               out="$RUNNER_TEMP/hs-work/helper"
               printf 'helper\\hermes-slim-unpack-%s.exe\n' "$target" >> "$RUNNER_TEMP/hs-work/unsigned.txt" ;;
             linux-*)
-              # zstd's C sources need a musl C compiler for the static build.
-              sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools
+              # qemu runs the arm64 build here (build_unpack.py --version, the check below).
+              sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends qemu-user-static
+              ${{ steps.py.outputs.bin }} slim/build_unpack.py linux-arm64 dist
               out=dist ;;
             *) out=dist ;;
           esac
@@ -289,7 +291,7 @@ jobs:
           (cd dist && sha256sum "$u" > "$u.sha256")
       # Informational: the runner's real filesystem and antivirus, old unpack against new.
       - name: Unpack timing
-        if: ${{ !matrix.container }}
+        if: ${{ !matrix.container && matrix.target != 'linux-arm64' }}
         run: |
           for archive in dist/hermes-slim-*-${{ matrix.target }}.tar.zst; do :; done
           unpacker=dist/hermes-slim-unpack-${{ matrix.target }}
@@ -298,6 +300,16 @@ jobs:
           [ -f "$zstd" ] || zstd=zstd
           chmod +x "$zstd" "$unpacker" 2>/dev/null || true
           ${{ steps.py.outputs.bin }} slim/bench_unpack.py "$archive" "$unpacker" --zstd "$zstd"
+      # The arm64 build is cross-compiled here and published from this leg: unpack the bundle
+      # with it under qemu and require the same tree as the native build's.
+      - name: Check the linux-arm64 unpacker under qemu
+        if: matrix.target == 'linux-x64'
+        run: |
+          for archive in dist/hermes-slim-*-linux-x64.tar.zst; do :; done
+          mkdir -p "$RUNNER_TEMP/u-x64" "$RUNNER_TEMP/u-arm64"
+          dist/hermes-slim-unpack-linux-x64 "$archive" "$RUNNER_TEMP/u-x64" --strip 1
+          qemu-aarch64-static dist/hermes-slim-unpack-linux-arm64 "$archive" "$RUNNER_TEMP/u-arm64" --strip 1
+          diff -r --no-dereference "$RUNNER_TEMP/u-x64" "$RUNNER_TEMP/u-arm64" && echo "linux-arm64 unpacker: identical tree"
       # A private X display for the smoke test's computer-use step (list_windows + a screenshot through
       # Hermes' computer_use tool layer against the bundled cua-driver). The libs are cua-driver's own.
       - name: Computer-use test display
