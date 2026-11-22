@@ -168,7 +168,25 @@ stream. Rounds that gain bytes retry at once, rounds that gain none back off (1,
 then 30 s), and about two minutes without a byte stops with "rerun to resume". Small files
 (manifest, checksum, helper) retry the same way, and only a 404/410 means "absent": a mirror
 may publish no checksum, but a checksum it failed to serve stops the install rather than
-installing unverified. Windows
+installing unverified.
+
+Unpacking is the installers' other long pole: ~27,000 files, and on Windows Defender scans
+each one as its handle closes, so `zstd | tar` (one stream decoded in order, one file closed
+at a time) waits on every scan in series. Bundles are therefore written in zstd's seekable
+format (`slim/zstd_frames.py`): independent 8 MiB frames, each with a content checksum, then
+a seek table in a skippable frame. That costs ~1% in size, and any zstd decoder still reads
+it as one stream. `hermes-slim-unpack` (`slim/unpack`, Rust, built with soldr) reads the
+table and decodes frames on every core, parses the tar on one thread, and creates, writes,
+timestamps and closes files on a pool of writers so the per-file scans overlap. Links are
+made only after every file is written (no write can follow one out of the install), `..`
+and absolute paths are refused, and modes and PAX mtimes are kept to the nanosecond (Python
+checks a `.pyc` against its source's mtime; tarfile's rounded header value is a second
+off). The release ships it for macOS and Windows (native on ARM64, signed with the bundle) as
+`unpack TARGET NAME SHA256 SIZE` in the manifest. The installers fetch it alongside the
+bundle, pinned to that sha256, in place of the zstd helper; a mirror or a local archive may
+have it beside the bundle. A checksum mismatch stops the install; a missing unpacker, or one
+that fails to unpack, falls back to `zstd | tar`. The bundle job prints both timings on each
+macOS and Windows runner (`slim/bench_unpack.py`). Windows
 unpacks the `.tar.zst` with the release's `zstd-win32-x64.exe` (facebook/zstd's win64 build,
 pinned in `slim/zstd_windows.py` and Authenticode-signed with the bundle) piped through
 `cmd` into System32's `tar.exe` (#141); a release with only a `.zip` still extracts with

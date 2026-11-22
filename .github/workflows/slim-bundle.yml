@@ -32,6 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s slim/tests -v
+      - name: Set up soldr
+        uses: forge-ci/setup-soldr@271d19234f51ed1a908ee6ecdd721a75dff1dbb6 # v0
+        env:
+          SOLDR_GITHUB_TOKEN: ${{ github.token }}
+      - name: hermes-slim-unpack tests
+        working-directory: slim/unpack
+        run: |
+          soldr cargo fmt --check
+          soldr cargo clippy --locked --all-targets -- -D warnings
+          soldr cargo test --locked
 
   # The leg list lives in slim/ci_legs.py: a job-level `if:` cannot read `matrix`, so the matrix
   # is computed here. Unlabelled PRs skip darwin-arm64 with a notice (GitHub's arm64 pool cancels
@@ -100,6 +110,24 @@ jobs:
       - name: Standalone zstd for clients without one
         if: matrix.target == 'linux-x64-musl' || startsWith(matrix.target, 'darwin-')
         run: sh slim/build_zstd.sh dist
+      # hermes-slim-unpack (slim/unpack): the installers' parallel unpacker, built natively per
+      # macOS/Windows leg before signing, so it is signed (and notarized) with the bundle.
+      - name: Set up soldr
+        if: startsWith(matrix.target, 'darwin-') || startsWith(matrix.target, 'win32-')
+        uses: forge-ci/setup-soldr@271d19234f51ed1a908ee6ecdd721a75dff1dbb6 # v0
+        env:
+          SOLDR_GITHUB_TOKEN: ${{ github.token }}
+      - name: Build hermes-slim-unpack
+        if: startsWith(matrix.target, 'darwin-') || startsWith(matrix.target, 'win32-')
+        run: |
+          target="${{ matrix.target }}"
+          case "$target" in
+            win32-*)
+              out="$RUNNER_TEMP/hs-work/helper"
+              printf 'helper\\hermes-slim-unpack-%s.exe\n' "$target" >> "$RUNNER_TEMP/hs-work/unsigned.txt" ;;
+            *) out=dist ;;
+          esac
+          ${{ steps.py.outputs.bin }} slim/build_unpack.py "$target" "$out"
       # Gatekeeper, the .pkg path and notarization need every Mach-O signed with our
       # Developer ID, hardened runtime and a secure timestamp (#140). Builds that publish
       # (main pushes, v* tags) fail closed without the org secrets; PRs from forks get no
@@ -150,15 +178,18 @@ jobs:
           APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
           python3 slim/macos/sign_tree.py --entitlements slim/macos/entitlements.plist \
-            "$RUNNER_TEMP/hs-work/hermes-slim" dist/zstd-${{ matrix.target }}
-          # The helper's checksum must describe the signed bytes.
-          (cd dist && shasum -a 256 zstd-${{ matrix.target }} > zstd-${{ matrix.target }}.sha256)
+            "$RUNNER_TEMP/hs-work/hermes-slim" dist/zstd-${{ matrix.target }} dist/hermes-slim-unpack-${{ matrix.target }}
+          # The helpers' checksums must describe the signed bytes.
+          for h in zstd-${{ matrix.target }} hermes-slim-unpack-${{ matrix.target }}; do
+            (cd dist && shasum -a 256 "$h" > "$h.sha256")
+          done
       - name: Verify every Mach-O is Developer ID signed
         if: startsWith(matrix.target, 'darwin-')
         env:
           SIGNED: ${{ steps.macsign.outputs.sign }}
         run: |
-          if ! python3 slim/macho_signatures.py "$RUNNER_TEMP/hs-work/hermes-slim" --list --fail-unsigned; then
+          if ! python3 slim/macho_signatures.py "$RUNNER_TEMP/hs-work/hermes-slim" --list --fail-unsigned ||
+             ! python3 slim/macho_signatures.py dist/hermes-slim-unpack-${{ matrix.target }} --list --fail-unsigned; then
             [ "$SIGNED" != true ] || { echo "::error::Mach-O binaries left without a Developer ID signature"; exit 1; }
             echo "::warning::unsigned darwin bundle (PR without signing secrets)"
           fi
@@ -245,6 +276,22 @@ jobs:
           cp "$RUNNER_TEMP/hs-work/helper/zstd-win32-x64.exe" dist/
           # The checksum describes the signed bytes.
           (cd dist && sha256sum zstd-win32-x64.exe > zstd-win32-x64.exe.sha256)
+      - name: Publish the Windows unpacker
+        if: startsWith(matrix.target, 'win32-')
+        run: |
+          u=hermes-slim-unpack-${{ matrix.target }}.exe
+          cp "$RUNNER_TEMP/hs-work/helper/$u" dist/
+          (cd dist && sha256sum "$u" > "$u.sha256")
+      # Informational: the runner's real filesystem and antivirus, old unpack against new.
+      - name: Unpack timing
+        if: startsWith(matrix.target, 'darwin-') || startsWith(matrix.target, 'win32-')
+        run: |
+          for archive in dist/hermes-slim-*-${{ matrix.target }}.tar.zst; do :; done
+          unpacker=dist/hermes-slim-unpack-${{ matrix.target }}
+          [ -f "$unpacker" ] || unpacker="$unpacker.exe"
+          zstd="$RUNNER_TEMP/hs-work/helper/zstd-win32-x64.exe"; [ -f "$zstd" ] || zstd="dist/zstd-${{ matrix.target }}"
+          chmod +x "$zstd" "$unpacker" 2>/dev/null || true
+          ${{ steps.py.outputs.bin }} slim/bench_unpack.py "$archive" "$unpacker" --zstd "$zstd"
       # A private X display for the smoke test's computer-use step (list_windows + a screenshot through
       # Hermes' computer_use tool layer against the bundled cua-driver). The libs are cua-driver's own.
       - name: Computer-use test display
@@ -267,7 +314,7 @@ jobs:
             # this smoke run, stand this leg's signed copy beside the archive, outside dist/.
             smoke="$RUNNER_TEMP/smoke"
             mkdir -p "$smoke"
-            cp "$archive" "$archive.sha256" "$helper" "$smoke/"
+            cp "$archive" "$archive.sha256" "$helper" dist/hermes-slim-unpack-* "$smoke/"
             (cd "$smoke" && sha256sum zstd-win32-x64.exe > zstd-win32-x64.exe.sha256)
             archive="$smoke/$(basename "$archive")"
           fi

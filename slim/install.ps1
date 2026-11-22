@@ -37,6 +37,7 @@ $repo = "talos-hq/hermes-slim"
 # PROCESSOR_ARCHITEW6432 is the machine's architecture when this PowerShell itself is emulated.
 $machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $target = if ($Arch) { "win32-$Arch" } elseif ($machine -eq "ARM64") { "win32-arm64" } else { "win32-x64" }
+$unpackAsset = "hermes-slim-unpack-$target.exe"
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 # .NET Framework allows 2 connections per host by default, which would serialize the ranges.
 [Net.ServicePointManager]::DefaultConnectionLimit = [Math]::Max([Net.ServicePointManager]::DefaultConnectionLimit, $Jobs + 2)
@@ -258,49 +259,82 @@ function Test-Installed([string]$Tree) {
 }
 function Test-NeedBundle { -not (Test-Installed $current) -and -not (Test-Installed (Join-Path $new "hermes-slim")) }
 
-# A .tar.zst bundle unpacks with a standalone zstd.exe piped into Windows' own tar.exe
-# (bsdtar, in System32 since Windows 10 1803). The helper downloads in the background
-# while the bundle's ranges do (#141, #144) and is checked against its sha256 before use.
-# One helper for both targets: facebook/zstd publishes no ARM64 Windows build, and the x64
-# one runs under emulation for the few seconds an unpack takes.
-$zstdAsset = "zstd-win32-x64.exe"
-$script:helperJob = $null
-function Start-Helper([string]$Base, [string]$Sha256) {
-    if (Get-Command zstd.exe -ErrorAction SilentlyContinue) { return }
-    $dest = Join-Path $downloads $zstdAsset
+# Small helper downloads run in the background while the bundle's ranges do (#144). Each is
+# checked against its sha256 (from the manifest, else its .sha256) before it runs.
+function Start-Fetch([string]$Asset, [string]$Base, [string]$Sha256) {
+    $dest = Join-Path $downloads $Asset
     Remove-Item -Force $dest -ErrorAction SilentlyContinue
     $client = New-Object Net.WebClient
-    $script:helperJob = @{ Client = $client; Task = $client.DownloadFileTaskAsync("$Base/$zstdAsset", $dest)
-                           Path = $dest; Base = $Base; Sha256 = $Sha256 }
+    @{ Client = $client; Task = $client.DownloadFileTaskAsync("$Base/$Asset", $dest)
+       Asset = $Asset; Path = $dest; Base = $Base; Sha256 = $Sha256 }
+}
+# The verified file a Start-Fetch job downloaded. $null when the server has no such file, or
+# (-Optional) publishes no checksum for it; a checksum mismatch always throws.
+function Complete-Fetch($Job, [switch]$Optional) {
+    $ok = $false
+    try { $ok = $Job.Task.Wait(120000) -and -not $Job.Task.IsFaulted }
+    catch { if ($Optional -and (Get-Status $_) -in 404, 410) { $Job.Client.Dispose(); return $null } }
+    if (-not $ok) { $Job.Client.CancelAsync() }
+    $Job.Client.Dispose()
+    if (-not $ok) {
+        # The background copy is the fast path; a bad connection gets the retrying, resuming one.
+        Write-Host "-> fetching $($Job.Asset) again"
+        Remove-Item -Force $Job.Path -ErrorAction SilentlyContinue
+        try { Receive-Stream "$($Job.Base)/$($Job.Asset)" $Job.Path }
+        catch { if ($Optional -and $_.Exception.Message -match 'answered HTTP (404|410)$') { return $null }; throw }
+    }
+    $want = $Job.Sha256
+    if (-not $want) {
+        $text = Get-Text "$($Job.Base)/$($Job.Asset).sha256"
+        if (-not $text) {
+            if ($Optional) { return $null }
+            throw "no $($Job.Asset).sha256 at $($Job.Base)"
+        }
+        $want = ($text -split '\s+')[0]
+    }
+    if ((Get-Sha256 $Job.Path) -ne $want) { throw "$($Job.Asset) sha256 mismatch" }
+    $Job.Path
+}
+# A verified copy of Asset (with Asset.sha256) beside a local archive, or $null.
+function Find-Beside([string]$ArchivePath, [string]$Asset) {
+    $path = Join-Path (Split-Path $ArchivePath) $Asset
+    if (-not (Test-Path $path) -or -not (Test-Path "$path.sha256")) { return $null }
+    if ((Get-Sha256 $path) -ne ((Get-Content "$path.sha256" -Raw) -split '\s+')[0]) { throw "$Asset sha256 mismatch" }
+    $path
+}
+
+# hermes-slim-unpack (slim/unpack) decodes the bundle's zstd frames on every core and writes
+# its ~27,000 files on many threads at once. Defender scans each new file as its handle
+# closes, so one writer at a time (tar.exe) waits on every scan in series; many writers
+# overlap them. It is built per architecture, so ARM64 runs it natively. A release that lists
+# it in its manifest gets it alongside the bundle, pinned to the manifest's sha256; a mirror
+# or a local -Archive may have it beside the archive. Without it, or if it cannot unpack the
+# bundle, zstd.exe | tar.exe does.
+$script:unpackJob = $null
+function Get-Unpacker([string]$ArchivePath) {
+    if ($script:unpackJob) { return Complete-Fetch $script:unpackJob -Optional }
+    Find-Beside $ArchivePath $unpackAsset
+}
+
+# The fallback: a standalone zstd.exe piped into Windows' own tar.exe (bsdtar, in System32
+# since Windows 10 1803). One zstd for both targets: facebook/zstd publishes no ARM64 Windows
+# build, and the x64 one runs under emulation.
+$zstdAsset = "zstd-win32-x64.exe"
+$script:helperJob = $null
+$script:releaseBase = ""
+$script:helperSha = ""
+function Start-Helper([string]$Base, [string]$Sha256) {
+    if (Get-Command zstd.exe -ErrorAction SilentlyContinue) { return }
+    $script:helperJob = Start-Fetch $zstdAsset $Base $Sha256
 }
 function Get-Helper([string]$ArchivePath) {
     $onPath = Get-Command zstd.exe -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
-    $job = $script:helperJob
-    if ($job) {
-        # The background copy is the fast path; a bad connection gets the retrying, resuming one.
-        $ok = $false
-        try { $ok = $job.Task.Wait(120000) -and -not $job.Task.IsFaulted } catch { }
-        if (-not $ok) { $job.Client.CancelAsync() }
-        $job.Client.Dispose()
-        if (-not $ok) {
-            Write-Host "-> fetching $zstdAsset again"
-            Remove-Item -Force $job.Path -ErrorAction SilentlyContinue
-            Receive-Stream "$($job.Base)/$zstdAsset" $job.Path
-        }
-        $want = $job.Sha256
-        if (-not $want) {
-            $text = Get-Text "$($job.Base)/$zstdAsset.sha256"
-            if (-not $text) { throw "no $zstdAsset.sha256 at $($job.Base)" }
-            $want = ($text -split '\s+')[0]
-        }
-        $path = $job.Path
-    } else {
-        $path = Join-Path (Split-Path $ArchivePath) $zstdAsset
-        if (-not (Test-Path "$path.sha256")) { throw "no zstd here: put $zstdAsset and $zstdAsset.sha256 beside the archive" }
-        $want = ((Get-Content "$path.sha256" -Raw) -split '\s+')[0]
-    }
-    if ((Get-Sha256 $path) -ne $want) { throw "$zstdAsset sha256 mismatch" }
+    # The unpacker was preferred, so the helper was never started: fetch it now.
+    if (-not $script:helperJob -and $script:releaseBase) { Start-Helper $script:releaseBase $script:helperSha }
+    if ($script:helperJob) { return Complete-Fetch $script:helperJob }
+    $path = Find-Beside $ArchivePath $zstdAsset
+    if (-not $path) { throw "no zstd here: put $zstdAsset and $zstdAsset.sha256 beside the archive" }
     $path
 }
 function Expand-Bundle([string]$ArchivePath, [string]$Dest) {
@@ -311,6 +345,16 @@ function Expand-Bundle([string]$ArchivePath, [string]$Dest) {
         return
     }
     New-Item -ItemType Directory -Force $Dest | Out-Null
+    $unpacker = Get-Unpacker $ArchivePath
+    if ($unpacker) {
+        # Start-Process, not &: under -ErrorAction Stop, Windows PowerShell 5.1 turns a native
+        # program's stderr into a terminating error when output is redirected.
+        $proc = Start-Process $unpacker -ArgumentList "`"$ArchivePath`" `"$Dest`"" -NoNewWindow -Wait -PassThru
+        if (-not $proc.ExitCode) { return }
+        Write-Host "-> $unpackAsset could not unpack it (exit $($proc.ExitCode)); trying zstd and tar"
+        Remove-Item -Recurse -Force $Dest
+        New-Item -ItemType Directory -Force $Dest | Out-Null
+    }
     $zstd = Get-Helper $ArchivePath
     $tar = Join-Path $env:SystemRoot "System32\tar.exe"
     if (-not (Test-Path $tar)) { throw "unpacking needs $tar (Windows 10 1803 or newer)" }
@@ -322,7 +366,11 @@ function Expand-Bundle([string]$ArchivePath, [string]$Dest) {
 }
 
 if ($Archive -match '^https?://') {
-    if ($Archive.EndsWith(".tar.zst")) { Start-Helper ($Archive -replace '/[^/]*$', '') "" }
+    if ($Archive.EndsWith(".tar.zst")) {
+        $mirror = $Archive -replace '/[^/]*$', ''
+        $script:unpackJob = Start-Fetch $unpackAsset $mirror ""
+        Start-Helper $mirror ""
+    }
     # A mirror may publish no checksum (404), but one it failed to serve is an error.
     $text = Get-Text "$Archive.sha256"
     if ($text) { $expected = ($text -split '\s+')[0] } else { Write-Host "-> no $Archive.sha256 on this mirror; installing unverified" }
@@ -358,6 +406,9 @@ if ($Archive -match '^https?://') {
         $name = $Matches[1]; $expected = $Matches[2]
         $helperLine = $lines | Where-Object { $_ -match "^zstd win32-x64 $([regex]::Escape($zstdAsset)) ([0-9a-f]{64}) " } | Select-Object -First 1
         $helperSha = if ($helperLine -match " ([0-9a-f]{64}) ") { $Matches[1] } else { "" }
+        $unpackAsset = "hermes-slim-unpack-$target.exe"
+        $unpackLine = $lines | Where-Object { $_ -match "^unpack $target $([regex]::Escape($unpackAsset)) ([0-9a-f]{64}) " } | Select-Object -First 1
+        $unpackSha = if ($unpackLine -match " ([0-9a-f]{64}) ") { $Matches[1] } else { "" }
     } else {
         # Releases from before the manifest: look the asset up through the API.
         $api = if ($Version -eq "latest") { "https://api.github.com/repos/$repo/releases/latest" } else { "https://api.github.com/repos/$repo/releases/tags/$Version" }
@@ -376,6 +427,7 @@ if ($Archive -match '^https?://') {
             $target = "win32-x64"; $asset = & $pick $target
         }
         $helperSha = ""
+        $unpackSha = ""
         if (-not $asset) { throw "no $target bundle in release $Version" }
         $name = $asset.name
         $text = Get-Text "https://github.com/$repo/releases/download/$Version/$name.sha256"
@@ -383,7 +435,13 @@ if ($Archive -match '^https?://') {
         $expected = ($text -split '\s+')[0]
     }
     $Archive = Join-Path $downloads $name
-    if ($name.EndsWith(".tar.zst") -and (Test-NeedBundle)) { Start-Helper "https://github.com/$repo/releases/download/$Version" $helperSha }
+    $script:releaseBase = "https://github.com/$repo/releases/download/$Version"
+    $script:helperSha = $helperSha
+    if ($name.EndsWith(".tar.zst") -and (Test-NeedBundle)) {
+        # The unpacker replaces zstd.exe | tar.exe, so with it listed the helper is not fetched.
+        if ($unpackSha) { $script:unpackJob = Start-Fetch $unpackAsset $script:releaseBase $unpackSha }
+        else { Start-Helper $script:releaseBase $helperSha }
+    }
     if (Test-NeedBundle) { Receive-File "https://github.com/$repo/releases/download/$Version/$name" $Archive $expected }
 }
 
@@ -412,7 +470,7 @@ if (Test-Installed $current) {
 }
 # The cached download (and the helper that unpacked it) has served its purpose.
 if ($Archive.StartsWith($downloads)) { Remove-Item -Force $Archive -ErrorAction SilentlyContinue }
-Remove-Item -Force (Join-Path $downloads $zstdAsset) -ErrorAction SilentlyContinue
+Remove-Item -Force (Join-Path $downloads $zstdAsset), (Join-Path $downloads $unpackAsset) -ErrorAction SilentlyContinue
 
 $bin = Join-Path $current "bin"
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

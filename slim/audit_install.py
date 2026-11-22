@@ -336,20 +336,29 @@ def main() -> int:
     if code == 0:
         check_signatures(report, tree, "installed tree")
         check_contents(report, tree, asset, shim_log, env, work)
+    # The parallel unpacker (slim/unpack): when the release publishes one for this target, the
+    # installer must have unpacked with it rather than zstd | tar.
+    unpacker = next((n for n in assets if n.startswith(f"hermes-slim-unpack-{target}") and not n.endswith(".sha256")), None)
+    log = (work / "install-release.log").read_text(errors="replace")
+    used = next((line.strip() for line in log.splitlines() if line.startswith("unpacked ")), "")
+    report.add("unpack", "bundle unpacked by hermes-slim-unpack (parallel decode + writes)",
+               bool(used) if unpacker else None, used or (f"{unpacker} published but not used" if unpacker
+                                                         else f"no hermes-slim-unpack-{target} in {rel['tag_name']}"))
 
     # 2. The same files through the range server, to see what ran in parallel.
     mirror = work / "mirror"
     # Both Windows targets unpack with the x64 helper (no ARM64 zstd build upstream).
     helper = "zstd-win32-x64" if WINDOWS else f"zstd-{target}"
-    for name in [asset, f"{asset}.sha256"] + [n for n in assets if n.startswith(helper)]:
+    for name in [asset, f"{asset}.sha256"] + [n for n in assets if n.startswith((helper, f"hermes-slim-unpack-{target}"))]:
         download(assets[name], mirror / name)
     # The helper runs on the user's machine before anything in the bundle: it must be signed too.
     if MACOS or WINDOWS:
-        helpers = [n for n in assets if n.startswith("zstd-darwin" if MACOS else helper) and not n.endswith(".sha256")]
+        prefixes = ("zstd-darwin", "hermes-slim-unpack-darwin") if MACOS else (helper, "hermes-slim-unpack-win32")
+        helpers = [n for n in assets if n.startswith(prefixes) and not n.endswith(".sha256")]
         for name in helpers:
             download(assets[name], work / "helpers" / name)
         if helpers:
-            check_signatures(report, work / "helpers", "zstd helpers")
+            check_signatures(report, work / "helpers", "zstd and unpack helpers")
     server = subprocess.Popen([sys.executable, str(SLIM / "tests" / "range_server.py"), str(mirror)],
                               stdout=subprocess.PIPE, text=True)
     try:
