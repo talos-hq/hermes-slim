@@ -129,7 +129,7 @@ jobs:
               printf 'helper\\hermes-slim-unpack-%s.exe\n' "$target" >> "$RUNNER_TEMP/hs-work/unsigned.txt" ;;
             linux-*)
               # qemu runs the arm64 build here (build_unpack.py --version, the check below).
-              sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends qemu-user-static
+              sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends qemu-user
               ${{ steps.py.outputs.bin }} slim/build_unpack.py linux-arm64 dist
               out=dist ;;
             *) out=dist ;;
@@ -308,7 +308,7 @@ jobs:
           for archive in dist/hermes-slim-*-linux-x64.tar.zst; do :; done
           mkdir -p "$RUNNER_TEMP/u-x64" "$RUNNER_TEMP/u-arm64"
           dist/hermes-slim-unpack-linux-x64 "$archive" "$RUNNER_TEMP/u-x64" --strip 1
-          qemu-aarch64-static dist/hermes-slim-unpack-linux-arm64 "$archive" "$RUNNER_TEMP/u-arm64" --strip 1
+          qemu-aarch64 dist/hermes-slim-unpack-linux-arm64 "$archive" "$RUNNER_TEMP/u-arm64" --strip 1
           diff -r --no-dereference "$RUNNER_TEMP/u-x64" "$RUNNER_TEMP/u-arm64" && echo "linux-arm64 unpacker: identical tree"
       # A private X display for the smoke test's computer-use step (list_windows + a screenshot through
       # Hermes' computer_use tool layer against the bundled cua-driver). The libs are cua-driver's own.

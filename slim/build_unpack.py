@@ -9,7 +9,7 @@ the .sha256 again, so the checksum the installers check describes the signed byt
 target macOS 11 like slim/build_zstd.sh, so the helper runs on every Mac the bundle does.
 Linux builds are static musl binaries (linux-x64 serves the glibc and musl bundles alike),
 both built on an x86_64 host: soldr's musl toolchain runs only there. The arm64 one is
-checked under qemu-user (qemu-aarch64-static).
+checked under qemu-user (qemu-aarch64).
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def main() -> int:
     shutil.copyfile(built, dest)
     dest.chmod(0o755)
     # A cross-built Linux arm64 binary runs under qemu-user on an x86_64 host.
-    runner = ["qemu-aarch64-static"] if target == "linux-arm64" and platform.machine() != "aarch64" else []
+    runner = ["qemu-aarch64"] if target == "linux-arm64" and platform.machine() not in ("aarch64", "arm64") else []
     print(subprocess.run([*runner, str(dest), "--version"], capture_output=True, text=True, check=True, timeout=60).stdout.strip())
     if target.startswith("linux-"):
         linked = subprocess.run(["file", "-L", str(dest)], capture_output=True, text=True, check=True, timeout=60).stdout
