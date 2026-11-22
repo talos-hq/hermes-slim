@@ -15,13 +15,13 @@ def test_macos_cua_selects_bundle_binary_and_preserves_signature(tmp_path, targe
     version = lock.version(package.name)
     assert version is not None
     payload = tmp_path / "payload"
-    app = payload / "CuaDriver.app"
+    app = payload / "ComputerUse.app"
     members = {
         "cua-driver": b"standalone executable fixture",
-        "CuaDriver.app/Contents/MacOS/cua-driver": b"bundle executable fixture",
-        "CuaDriver.app/Contents/MacOS/cua-cursor-theme": b"cursor helper fixture",
-        "CuaDriver.app/Contents/Info.plist": b"bundle metadata fixture",
-        "CuaDriver.app/Contents/_CodeSignature/CodeResources": b"signature fixture",
+        "ComputerUse.app/Contents/MacOS/cua-driver": b"bundle executable fixture",
+        "ComputerUse.app/Contents/MacOS/cua-cursor-theme": b"cursor helper fixture",
+        "ComputerUse.app/Contents/Info.plist": b"bundle metadata fixture",
+        "ComputerUse.app/Contents/_CodeSignature/CodeResources": b"signature fixture",
     }
     for name, content in members.items():
         file = payload / name
@@ -41,12 +41,10 @@ def test_macos_cua_selects_bundle_binary_and_preserves_signature(tmp_path, targe
     assert "-binary.tar.gz" not in package.fetch_url(version, target)
 
 
-def test_windows_cua_keeps_uiaccess_and_cursor_helpers(tmp_path):
+def test_windows_cua_keeps_identical_compatibility_executable(tmp_path):
     package = get_package("cua-driver")
     archive = tmp_path / "cua.zip"
-    members = {name: name.encode() for name in (
-        "cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe", "cua_driver_sdk.dll",
-    )}
+    members = {"computer-use.exe": b"signed PE fixture", "cua-driver.exe": b"signed PE fixture"}
     with zipfile.ZipFile(archive, "w") as zipped:
         for name, content in members.items():
             zipped.writestr(name, content)

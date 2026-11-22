@@ -2574,8 +2574,8 @@ DEFAULT_CONFIG = {
         # Path (~ ok) to the reviewed manifest for permission_mode bounded; passed as
         # --capability-manifest. See cua.ai/docs/reference/cua-driver/permission-modes
         "capability_manifest": "",
-        # macOS only: allow an UNSIGNED CuaDriver.app for the private-session daemon. False fails
-        # closed unless signed with the official com.trycua.driver identity. Only for local driver
+        # macOS only: allow an UNSIGNED ComputerUse.app for the private-session daemon. False fails
+        # closed unless signed with the official com.taloshq.computer-use identity. Only for local driver
         # development from source.
         "allow_unsigned_driver": False,
     },

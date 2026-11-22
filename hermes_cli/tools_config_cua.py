@@ -149,7 +149,7 @@ def install_cua_driver(upgrade: bool = False, show_installer_progress: bool = Tr
 
         app = _resolve_cua_driver_app_path(binary)
         if not app:
-            return _fail("    macOS computer use requires the signed CuaDriver.app, not a bare binary.",
+            return _fail("    macOS computer use requires the signed ComputerUse.app, not a bare binary.",
                          "    The PM cua-driver package must include its signed macOS app bundle.")
         try:
             _validate_cua_driver_app_signature(app)
@@ -276,4 +276,4 @@ def _print_cua_platform_notes(is_windows: bool, is_linux: bool, *, fresh_install
                     else "    Grant macOS permissions if not done yet:")
         _print_info("      System Settings > Privacy & Security > Accessibility")
         _print_info("      System Settings > Privacy & Security > Screen Recording")
-        _print_info("    Allow CuaDriver.app; run `hermes computer-use permissions grant` for guidance.")
+        _print_info("    Allow ComputerUse.app; run `hermes computer-use permissions grant` for guidance.")

@@ -80,7 +80,7 @@ def bundled_cua_driver_cmd() -> Optional[str]:
     from pm.paths import repo_root
 
     root = repo_root().parent / "tools" / "cua-driver"
-    rel = ("CuaDriver.app/Contents/MacOS/cua-driver" if sys.platform == "darwin"
+    rel = ("ComputerUse.app/Contents/MacOS/cua-driver" if sys.platform == "darwin"
            else "cua-driver.exe" if sys.platform == "win32" else "cua-driver")
     binary = root / rel
     return str(binary) if binary.is_file() and os.access(binary, os.X_OK) else None

@@ -1,7 +1,7 @@
 ---
 name: computer-use
 description: "Drive the desktop background-first; escalate on signal."
-version: 2.2.0
+version: 2.3.0
 author: Francesco Bonacci (f-trycua), Hermes Agent
 license: MIT
 platforms: [macos, windows, linux]
@@ -24,7 +24,11 @@ Everything here works with any tool-capable model — Claude, GPT, Gemini,
 or an open model on a local OpenAI-compatible endpoint. There is no
 Anthropic-native schema to learn.
 
-Hermes drives [cua-driver](https://github.com/trycua/cua) under the hood.
+Hermes drives [Talos HQ Computer Use](https://github.com/talos-hq/computer-use).
+Hermes Slim bundles the driver on macOS, Windows and Linux with glibc 2.34 or newer.
+Use `terminal` to run `hermes computer-use doctor` for setup diagnostics.
+After upgrading from the upstream driver on macOS, grant access to
+ComputerUse in Privacy & Security and rerun the doctor.
 This skill teaches the Hermes `computer_use` **action vocabulary**, which is
 NOT the driver's raw MCP vocabulary. Call the actions documented below and
 never the driver's tools by name: `capture` is a Hermes action that maps to
@@ -82,8 +86,8 @@ into a window) apply in every mode, and the safety rules below still bind you.
 
 | Platform | What to know |
 |---|---|
-| **macOS** | The OS itself must grant **Accessibility** and **Screen Recording** to CuaDriver (`com.trycua.driver`), not to Hermes. Hermes asks once — at setup or on the first `computer_use` call — and never re-prompts. If captures are empty or input is refused, have the user approve CuaDriver in System Settings → Privacy & Security, or run `hermes computer-use permissions grant` to raise the dialog again. A grant that shows ON but fails after a driver update is stale: `hermes computer-use permissions status` prints the `tccutil reset` fix. |
-| **Windows** | No permission dialog. The first run may show a SmartScreen prompt for the cua-driver UIAccess helper. Over SSH (Session 0) there is no interactive desktop: set `computer_use.autostart: true` and run `hermes computer-use install` from the console/RDP session once. |
+| **macOS** | The OS itself must grant **Accessibility** and **Screen Recording** to ComputerUse (`com.taloshq.computer-use`), not to Hermes. Hermes asks once — at setup or on the first `computer_use` call — and never re-prompts. If captures are empty or input is refused, have the user approve CuaDriver in System Settings → Privacy & Security, or run `hermes computer-use permissions grant` to raise the dialog again. A grant that shows ON but fails after a driver update is stale: `hermes computer-use permissions status` prints the `tccutil reset` fix. |
+| **Windows** | No permission dialog. Elevated windows may be inaccessible. Over SSH (Session 0) there is no interactive desktop: set `computer_use.autostart: true` and run `hermes computer-use install` from the console/RDP session once. |
 | **Linux, X11** | Fully supported (X11 + AT-SPI). |
 | **Linux, Wayland on Hyprland / Sway / labwc / river / Wayfire** | Hermes turns on cua-driver's native Wayland backend automatically (`computer_use.native_wayland: auto`); native and XWayland windows both work. |
 | **Linux, Wayland on GNOME / KDE Plasma** | cua-driver sees **only XWayland apps**; native Wayland windows do not appear in `list_windows` and full-screen capture fails. Fallbacks, in order: use `browser_exec` / `browser_cdp` for anything web; relaunch the target app under XWayland (Qt `QT_QPA_PLATFORM=xcb`, GTK `GDK_BACKEND=x11`, Chromium/Electron `--ozone-platform=x11`); or work on Hermes' own X11 screen (`hermes computer-use screen start`). On GNOME the user can add native support by installing cua's Shell helper (`wayland-helper/install.sh` in the driver directory, then log out/in) and setting `computer_use.native_wayland: true`. |
@@ -365,7 +369,7 @@ in your conversation context.
 | Click had no effect | Read the structured verdict. `effect:"unverifiable"` → fresh capture/state before retry, even with an escalation hint. `effect:"suspected_noop"` or a structured refusal → climb the recommended ladder: coordinate (px), then foreground. Browser chrome/native prompts remain native; page content is a separate toolset. Don't conclude the app is undrivable |
 | Type text disappears into a terminal emulator | cua-driver detects terminals (Ghostty, iTerm2, Terminal.app, Windows Terminal, mintty, etc.) and routes through key-event synthesis — should "just work" on a recent cua-driver. If it doesn't, ask the user to run `hermes computer-use doctor` |
 | `blocked pattern in type text` | You tried to `type` a shell command matching the dangerous-pattern block list (`curl ... \| bash`, `sudo rm -rf`, etc.). Break the command up or reconsider |
-| `hermes computer-use doctor` says "could not be started … Access is denied" (Windows) | The Hermes venv interpreter can't execute a binary under `C:\Program Files\WindowsApps`; the tool itself may still work because the shell resolves another copy on PATH. Fix once: reinstall cua-driver with the upstream installer (lands under the user profile) or set `HERMES_CUA_DRIVER_CMD` to a copy outside `WindowsApps`. The same denial spams `errors.log` for any other `WindowsApps` binary Hermes spawns (e.g. `bws.exe`) |
+| `hermes computer-use doctor` says "could not be started … Access is denied" (Windows) | The Hermes venv interpreter can't execute a binary under `C:\Program Files\WindowsApps`; the tool itself may still work because the shell resolves another copy on PATH. Fix once: run `hermes computer-use install` to repair the managed driver or set `HERMES_CUA_DRIVER_CMD` to a copy outside `WindowsApps`. The same denial spams `errors.log` for any other `WindowsApps` binary Hermes spawns (e.g. `bws.exe`) |
 | Anything else weird | **First action: ask the user to run `hermes computer-use doctor`.** It runs the cua-driver `health_report` MCP tool and prints a structured per-check matrix. Their output tells you (and them) exactly what's wrong |
 
 ## When NOT to use `computer_use`

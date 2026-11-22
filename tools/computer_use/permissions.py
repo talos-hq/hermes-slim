@@ -1,7 +1,7 @@
 """Cross-platform Computer Use readiness + macOS permission helpers. "Ready to drive" differs per platform: macOS
 needs explicit TCC grants (Accessibility + Screen Recording) via cua-driver ``permissions status`` / ``permissions
 grant``; Windows/Linux have no TCC toggles, so readiness == driver health. The grants attach to cua-driver's OWN
-identity (``com.trycua.driver``), not Hermes, so ``grant`` launches CuaDriver via LaunchServices for correct dialog
+identity (``com.taloshq.computer-use``), not Hermes, so ``grant`` launches ComputerUse via LaunchServices for correct dialog
 attribution. ``cua-driver doctor --json`` is the universal signal; ``computer_use_status`` folds it with the macOS
 detail into one payload for the desktop card, the ``permissions`` CLI and ``/api/tools/computer-use/status``."""
 
@@ -20,14 +20,14 @@ from hermes_cli._subprocess_compat import windows_hide_flags
 
 _RUNTIME_PLATFORMS = frozenset({"darwin", "win32", "linux"})  # mirrors the toolset platform_gate
 _BOOLS = ("accessibility", "screen_recording", "screen_recording_capturable")
-CUA_DRIVER_BUNDLE_ID = "com.trycua.driver"  # the only identity TCC rows and the private daemon are keyed to
+CUA_DRIVER_BUNDLE_ID = "com.taloshq.computer-use"  # the only identity TCC rows and the private daemon are keyed to
 _TCC_SERVICES = {"accessibility": "Accessibility", "screen_recording": "ScreenCapture"}  # status field -> tccutil service
 TCC_FIELDS = tuple(_TCC_SERVICES)
 
 def stale_tcc_grant_hint(*missing: str) -> str:
-    """Recovery text for grants the daemon reports missing while System Settings shows the CuaDriver toggle ON.
+    """Recovery text for grants the daemon reports missing while System Settings shows the ComputerUse toggle ON.
 
-    TCC keys each row to the app's code-signing requirement, so a row written for an earlier CuaDriver build can
+    TCC keys each row to the app's code-signing requirement, so a row written for an earlier ComputerUse build can
     stop matching after a driver update: the toggle stays ON, the daemon is denied, and flipping the toggle does
     not rewrite the requirement (trycua/cua#3170). Only a reset + re-grant recovers it, so the hint names the
     exact rows for the *missing* status fields.
@@ -35,7 +35,7 @@ def stale_tcc_grant_hint(*missing: str) -> str:
     resets = " && ".join(f"tccutil reset {_TCC_SERVICES[f]} {CUA_DRIVER_BUNDLE_ID}" for f in missing if f in _TCC_SERVICES)
     if not resets:
         return ""
-    return ("If System Settings already shows CuaDriver ON, the stored grant is stale (it no longer matches the installed "
+    return ("If System Settings already shows ComputerUse ON, the stored grant is stale (it no longer matches the installed "
             f"driver's signature): run `{resets}`, then `hermes computer-use permissions grant`.")
 
 def _child_env() -> dict[str, str]:
@@ -134,16 +134,16 @@ def computer_use_status(driver_cmd: Optional[str] = None) -> dict[str, Any]:
     return out
 
 def tcc_grant_marker() -> Path:
-    """Machine-wide marker: TCC grants belong to CuaDriver's identity, not a Hermes profile, so one request
+    """Machine-wide marker: TCC grants belong to ComputerUse's identity, not a Hermes profile, so one request
     covers every profile."""
     from hermes_constants import get_default_hermes_root
-    return get_default_hermes_root() / "computer_use" / "tcc-grant-requested"
+    return get_default_hermes_root() / "computer_use" / f"tcc-grant-requested-{CUA_DRIVER_BUNDLE_ID}"
 
 def request_tcc_grant_once(driver_cmd: Optional[str], *, platform: str = sys.platform) -> str:
     """Ask macOS for Accessibility + Screen Recording at most once per machine, without blocking the caller.
 
     The OS cannot grant these silently, so the first setup or first ``computer_use`` call launches
-    ``cua-driver permissions grant`` detached (macOS shows its dialog, attributed to CuaDriver) and writes the
+    ``cua-driver permissions grant`` detached (macOS shows its dialog, attributed to ComputerUse) and writes the
     marker first; nothing later re-prompts. ``hermes computer-use permissions grant`` stays the manual retry.
     Returns ``not_macos`` | ``already_requested`` | ``missing_driver`` | ``requested`` | ``failed``."""
     if platform != "darwin":
@@ -176,8 +176,8 @@ def request_permissions_grant(driver_cmd: Optional[str] = None) -> int:
     if not binary:
         print("cua-driver: not installed. Run: hermes computer-use install")
         return 2
-    print("Requesting Accessibility + Screen Recording for CuaDriver.\n"
-          f"macOS will show a dialog attributed to CuaDriver ({CUA_DRIVER_BUNDLE_ID}) — approve it, then return here.")
+    print("Requesting Accessibility + Screen Recording for ComputerUse.\n"
+          f"macOS will show a dialog attributed to ComputerUse ({CUA_DRIVER_BUNDLE_ID}) — approve it, then return here.")
     try:
         return int(subprocess.run([binary, "permissions", "grant"], env=_child_env(), stdin=subprocess.DEVNULL, check=False).returncode)
     except KeyboardInterrupt:  # pragma: no cover - interactive

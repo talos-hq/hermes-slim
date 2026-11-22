@@ -20,7 +20,7 @@ about.
 
 The built-in `computer_use` toolset is the recommended Hermes integration. It
 speaks MCP over stdio to
-[`cua-driver`](https://github.com/trycua/cua), an open-source background
+[Talos HQ Computer Use](https://github.com/talos-hq/computer-use), an open-source background
 computer-use driver. Each platform uses the appropriate accessibility +
 input stack under the hood:
 
@@ -63,10 +63,10 @@ it, and what each platform supports.
 
 **hermes-slim bakes the driver into the bundle.** The pinned, sha256-verified
 `cua-driver` from `pm/lock.json` ships at `<bundle>/tools/cua-driver/` on
-every target cua-driver publishes a build for (macOS, Windows, glibc Linux;
+every target with a Computer Use release (macOS, Windows, Linux with glibc 2.34 or newer;
 not the musl bundle). Hermes uses it directly — no Hermes PM runtime and no
 first-use download — and `hermes-slim-setup` validates it (and on macOS
-registers `CuaDriver.app` and asks once for the permission grants).
+registers `ComputerUse.app` and asks once for the permission grants).
 `hermes computer-use status` reports it as `[bundled with this install]`.
 
 **The driver ships with Hermes.** `cua-driver` is pinned in `pm/lock.json`
@@ -124,7 +124,7 @@ platform-appropriate prereqs:
 
 | Platform | Prereqs |
 |---|---|
-| **macOS** | System Settings → Privacy & Security → **Accessibility** + **Screen Recording** for CuaDriver (`com.trycua.driver`, in every permission mode — the driver daemon always launches through `CuaDriver.app`). macOS cannot grant these silently, so Hermes raises the OS dialog **once per machine** — during an interactive `hermes computer-use install` / `hermes-slim-setup`, or else on the first `computer_use` call — and never again (marker: `~/.hermes/computer_use/tcc-grant-requested`). `hermes computer-use permissions grant` raises it again on demand. |
+| **macOS** | System Settings → Privacy & Security → **Accessibility** + **Screen Recording** for ComputerUse (`com.taloshq.computer-use`, in every permission mode — the driver daemon always launches through `ComputerUse.app`). macOS cannot grant these silently, so Hermes raises the OS dialog **once per machine** — during an interactive `hermes computer-use install` / `hermes-slim-setup`, or else on the first `computer_use` call — and never again (marker: `~/.hermes/computer_use/tcc-grant-requested-com.taloshq.computer-use`). `hermes computer-use permissions grant` raises it again on demand. |
 | **Windows** | None at install time. If you're driving over SSH (not RDP / console), you need the autostart pattern — see [cua.ai/docs/how-to-guides/driver/windows-ssh](https://cua.ai/docs/how-to-guides/driver/windows-ssh) for the Session 0 ↔ Session 1+ proxy. |
 | **Linux** | A reachable display server; AT-SPI on (default on GNOME/KDE/Xfce). X11 is fully supported. Wayland depends on the compositor — see [Linux: X11 and Wayland](#linux-x11-and-wayland). |
 
@@ -190,10 +190,12 @@ fails loudly at session start rather than silently downgrading. Session YOLO
 still overrides bounded for that one session.
 
 On macOS, private-session daemons launch through the installed
-`CuaDriver.app` bundle (so permission grants attribute to the driver's own
+`ComputerUse.app` bundle (so permission grants attribute to the driver's own
 identity instead of resetting with every Hermes build), and Hermes verifies
-the bundle's code signature — exact `com.trycua.driver` identifier and the
-official signing team — before launching it. If you build cua-driver from
+the bundle's code signature — exact `com.taloshq.computer-use` identifier and the
+Talos HQ signing team (`NCFFSNX26D`) before launching it. Existing macOS
+users need to grant Accessibility and Screen Recording to the new app
+identity. If you build cua-driver from
 source (unsigned), opt in explicitly:
 
 ```yaml
@@ -210,7 +212,7 @@ closes that transport session. Hermes also stops private runtimes that it
 launched for bounded or unrestricted access. One Hermes
 conversation cannot change another runtime's mode or grants. Bounded and
 unrestricted modes use a private embedded daemon, launched through
-`CuaDriver.app` on macOS (see above).
+`ComputerUse.app` on macOS (see above).
 
 `smart` approval remains `standard`: an LLM classification cannot stand in for
 a reviewed manifest. A configured `bounded` manifest is kept as configured even
@@ -239,7 +241,7 @@ $ hermes computer-use doctor
   ✅ platform_supported: macOS 26.4.1 (arm64)
   ✅ session_active: MCP session is active.
   ❌ bundle_identity: Process has no CFBundleIdentifier.
-      → Run the binary inside CuaDriver.app so TCC grants attribute correctly.
+      → Run the binary inside ComputerUse.app so TCC grants attribute correctly.
   ✅ tcc_accessibility: Accessibility is granted.
   ✅ tcc_screen_recording: Screen Recording is granted.
   ✅ ax_capability: AX is trusted and reachable.
@@ -494,8 +496,7 @@ of screenshot context, not ~600K.
   `C:\Program Files\WindowsApps` cannot be executed by the Hermes venv
   interpreter (WinError 5 from `CreateProcess`), even though the shell
   resolves the same binary fine. The doctor now reports this as a
-  diagnosis instead of a traceback. Fix once: reinstall with the upstream
-  installer (lands under your user profile) or set
+  diagnosis instead of a traceback. Run `hermes computer-use install` to repair the managed driver, or set
   `HERMES_CUA_DRIVER_CMD` to a copy outside `WindowsApps`.
 - **Platform-specific deployment gotchas:**
   - **macOS** uses private SkyLight SPIs. Apple can change them in any
@@ -738,16 +739,16 @@ run `hermes tools` and enable the Computer Use toolset.
 didn't see may be blocking input. Dismiss it with `escape` or the close
 button.
 
-**macOS: System Settings shows CuaDriver ON, but `hermes computer-use
+**macOS: System Settings shows ComputerUse ON, but `hermes computer-use
 permissions status` / `doctor` report Accessibility or Screen Recording as
 not granted** — the stored grant is stale. macOS keys each permission row to
-the app's code-signing requirement; a row written for an earlier CuaDriver
+the app's code-signing requirement; a row written for an earlier ComputerUse
 build stops matching after a driver update, and flipping the toggle does not
 rewrite it. Reset the affected rows and re-grant:
 
 ```
-tccutil reset Accessibility com.trycua.driver
-tccutil reset ScreenCapture com.trycua.driver
+tccutil reset Accessibility com.taloshq.computer-use
+tccutil reset ScreenCapture com.taloshq.computer-use
 hermes computer-use permissions grant
 ```
 
