@@ -1003,3 +1003,25 @@ def test_watch_drain_retries_transport_failure(monkeypatch, isolated_registry):
     asyncio.run(runner._async_delegation_watcher(interval=0))
     assert adapter.handle_message.await_count == 2
     assert isolated_registry.completion_queue.empty()
+
+
+def test_idle_gateway_delivers_sealed_sessions_in_one_completion_turn(isolated_registry):
+    adapter = SimpleNamespace(handle_message=AdmittingHandler())
+    runner = _runner(adapter)
+    runner._load_background_notifications_mode = lambda: "concise"
+    runner._classify_completion_owner = AsyncMock(return_value=("deliver", "hermes-1", "hermes-1"))
+    runner._completion_notification_batch_window = 0
+    queue = isolated_registry.completion_queue
+    for index in (1, 2):
+        queue.put(dict(_completion_event(started_at=index, session_id=f"clud-{index}"),
+                       type="session_sealed", parent_session_id="hermes-1", mcp_server="clud",
+                       completion_reason="idle", output=f"Report {index} ready"))
+
+    asyncio.run(runner._drain_watch_notifications(queue))
+
+    assert queue.empty()
+    adapter.handle_message.assert_awaited_once()
+    event = adapter.handle_message.await_args.args[0]
+    assert event.internal
+    assert event.metadata["gateway_session_id"] == "hermes-1"
+    assert "Report 1 ready" in event.text and "Report 2 ready" in event.text

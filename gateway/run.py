@@ -3054,7 +3054,7 @@ def _drain_gateway_watch_events(completion_queue) -> list[dict]:
         evt_type = evt.get("type", "completion")
         if evt_type in {
             "watch_match", "watch_disabled", "watch_overflow_tripped", "watch_overflow_released",
-            "heartbeat"}:
+            "heartbeat", "session_sealed"}:
             watch_events.append(evt)
         elif evt_type == "async_delegation":
             requeue.append(evt)

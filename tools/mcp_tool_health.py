@@ -10,6 +10,7 @@ from typing import Iterable, Optional
 from tools.mcp_tool_errors import _is_method_not_found_error, _unwrap_exception_group
 from tools.mcp_tool_schema import mcp_prefixed_tool_name
 from tools.mcp_tool_common import _core
+from tools.mcp_session_sealed import SessionSealedNotifications
 from tools import mcp_tool_registration as _registration
 
 logger = logging.getLogger("tools.mcp_tool")
@@ -78,10 +79,13 @@ class MCPServerHealthMixin:
         callback silently discards them, so server-side warnings/errors during a tool call were invisible.
         Port of anomalyco/opencode#34529.
         """
+        sealed = self._session_sealed = SessionSealedNotifications()
+
         async def _on_log(params):
             try:
                 level = _core._MCP_LOG_LEVEL_MAP.get(str(getattr(params, "level", "info")).lower(), logging.INFO)
                 data = getattr(params, "data", None)
+                raw_data = data
                 if not isinstance(data, str):
                     try:
                         data = json.dumps(data, ensure_ascii=False, default=str)
@@ -92,6 +96,7 @@ class MCPServerHealthMixin:
                 logger_name = getattr(params, "logger", None)
                 origin = f"{self.name}/{logger_name}" if logger_name else self.name
                 logger.log(level, "MCP server log [%s]: %s", origin, data)
+                sealed.handle_log(logger_name, raw_data)
             except Exception:
                 logger.debug("Failed to handle MCP log notification from '%s'", self.name, exc_info=True)
         return _on_log
