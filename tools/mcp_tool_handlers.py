@@ -16,6 +16,7 @@ from hermes_platform import declaration
 from tools.registry import invalidate_check_fn_cache, tool_error
 from tools.ansi_strip import strip_unicode_tags
 from tools.mcp_tool_common import _exc_str, _sanitize_error, mcp_field, _core
+from tools.mcp_session_sealed import capture_launch
 from tools import mcp_tool_loop as _loop
 from tools.mcp_tool_content import (
     _MCP_HARD_RESULT_CAP_CHARS, _cache_mcp_audio_block, _cache_mcp_image_block, _mcp_result_with_native_images,
@@ -716,6 +717,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         # Read on the agent's thread: the coroutine below runs on the MCP loop, outside this context.
         from agent.tool_progress_relay import current_tool_progress
         report = current_tool_progress()
+        sealed_owner = capture_launch(tool_name, args, kwargs.get("task_id") or "")
 
         async def _on_progress(progress, total, message):
             if report is not None:
@@ -725,8 +727,10 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             async with server._rpc_lock, _track_inflight_rpc(server, server_name, op, retry_safe=read_only):
                 server._pending_call_context = contextvars.copy_context()  # for the elicitation callback
                 try:
-                    result = await _call_tool_racing_stdio_death(
+                    rpc = _call_tool_racing_stdio_death(
                         server, server_name, tool_name, args, _on_progress if report is not None else None)
+                    sealed = getattr(server, "_session_sealed", None) if sealed_owner else None
+                    result = await (sealed.track_launch(sealed_owner, rpc) if sealed else rpc)
                 finally:
                     server._pending_call_context = None
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy

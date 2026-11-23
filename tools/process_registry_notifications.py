@@ -360,6 +360,8 @@ def process_completion_display_text(events: list) -> str:
     if len(events) != 1:
         return f"{len(events)} Background Processes Finished"
     evt = events[0]
+    if server := evt.get("mcp_server"):
+        return f"{server} Session Sealed: {evt.get('session_id', 'unknown')}"
     reason, exit_code = evt.get("completion_reason") or "exited", evt.get("exit_code", "?")
     if reason == "killed":
         outcome = "Terminated"
@@ -471,6 +473,14 @@ def format_process_notification(evt: dict) -> str | None:
         return f"[IMPORTANT: {evt.get('message', '')}]"
     if evt_type == "async_delegation":
         return _format_async_delegation(evt)
+    if evt_type == "session_sealed":
+        server = evt["mcp_server"]
+        exit_code = evt["exit_code"]
+        exit_status = f"exit code {exit_code}" if exit_code is not None else "exit code unavailable"
+        return (
+            f"[IMPORTANT: {server} session {evt['session_id']} sealed "
+            f"(state: {evt['completion_reason']}, {exit_status}).\n"
+            f"Summary: {evt['output']}\nInspect this session with the {server} session tools.]")
     _sid, _cmd = evt.get("session_id", "unknown"), evt.get("command", "unknown")
     _attribution = _delegation_attribution_line(evt)
     if evt.get("handoff_note"):

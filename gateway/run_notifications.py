@@ -743,7 +743,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         See #9290.
         """
         from gateway.run import _drain_gateway_watch_events, _format_gateway_process_notification
+        from tools.process_registry_notifications import format_process_notification, should_surface_notification
         watch_events = _drain_gateway_watch_events(completion_queue)
+        sealed = []
         for evt in watch_events:
             next_retry_at = evt.get("_watch_next_retry_at")
             if next_retry_at is not None and next_retry_at > time.monotonic():
@@ -752,10 +754,12 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 completion_queue.put(evt)
                 continue
             async with self._completion_event_scope(evt):
-                from tools.process_registry_notifications import should_surface_notification
                 if not should_surface_notification(evt):
                     continue
                 if self._load_background_notifications_mode() == "off":
+                    continue
+                if evt.get("type") == "session_sealed":
+                    sealed.append(evt)
                     continue
                 if evt.get("type") == "heartbeat":
                     from gateway.session_automation import deliver_heartbeat
@@ -772,6 +776,17 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
             # The original event: a requeued tick folds again from what is still queued.
             if delivered is False:
                 self._requeue_refused_watch_event(completion_queue, evt)
+        if sealed:
+            # Render the original event, then use the ordinary completion type for
+            # admission, including coalescing and the parent-session preflight.
+            results = await asyncio.gather(*(self._enqueue_process_completion_notification(
+                format_process_notification(evt), {**evt, "type": "completion"}) for evt in sealed),
+                return_exceptions=True)
+            for evt, delivered in zip(sealed, results):
+                if isinstance(delivered, BaseException):
+                    logger.debug("Sealed-session notification admission failed", exc_info=delivered)
+                if delivered is False or isinstance(delivered, BaseException):
+                    self._requeue_refused_watch_event(completion_queue, evt)
 
     @staticmethod
     def _requeue_refused_watch_event(completion_queue, evt: dict) -> None:
