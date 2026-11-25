@@ -29,11 +29,11 @@ def session_request_keybox(store, session_id):
     return _open_sidecar(path, session_id, binding, writable=True)
 
 
-def _project(keybox, value):
+def _project(keybox, value, *, protocol=True):
     if isinstance(value, str):
         return keybox.redact_model_text(keybox.replay_session, value, redact_email=True)
     if isinstance(value, (tuple, list)):
-        return [_project(keybox, item) for item in value]
+        return [_project(keybox, item, protocol=protocol) for item in value]
     if not isinstance(value, dict):
         return value
     if value.get("type") in ("image", "image_url", "input_image", "input_audio", "input_file"):
@@ -42,14 +42,14 @@ def _project(keybox, value):
         raise ProtectedReplayError("Protected provider request contains opaque reasoning")
     projected = {}
     for name, item in value.items():
-        if name in _PROTOCOL_KEYS:
+        if protocol and name in _PROTOCOL_KEYS:
             projected[name] = item
-        elif name == "arguments" and isinstance(item, str):
+        elif protocol and name == "arguments" and isinstance(item, str):
             decoded = json.loads(item)
             safe = _project_value(keybox, decoded)
             projected[name] = item if safe == decoded else json.dumps(safe)
         else:
-            projected[name] = _project(keybox, item)
+            projected[name] = _project(keybox, item, protocol=protocol)
     return projected
 
 
@@ -89,6 +89,27 @@ def project_complete_response(keybox, assistant_message):
                 raise ProtectedReplayError("Protected tool arguments require local restoration")
     except (ValueError, RuntimeError):
         raise ProtectedReplayError("Protected provider response could not be projected") from None
+
+
+def project_tool_result(agent, result):
+    """Project the result before tool middleware or transcript sinks receive it."""
+    keybox = request_keybox(agent)
+    if keybox is None:
+        return result
+    if not isinstance(result, (str, dict, list, tuple, int, float, type(None))):
+        raise ProtectedReplayError("Protected tool result uses an unsupported format")
+    try:
+        if isinstance(result, str) and result.lstrip().startswith(("{", "[")):
+            try:
+                decoded = json.loads(result)
+            except ValueError:
+                decoded = None
+            if decoded is not None:
+                safe = _project(keybox, decoded, protocol=False)
+                return result if safe == decoded else json.dumps(safe, ensure_ascii=False)
+        return _project(keybox, result, protocol=False)
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected tool result could not be projected") from None
 
 
 def project_compression_input(compressor, history):
