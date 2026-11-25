@@ -304,18 +304,30 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
             (spool,) = _spool_files(spool_home)
             assert address.encode() not in spool.read_bytes()
             held = "unresolved-shutdown@example.org"
-            assert flush_overflow_to_file({route: [held]}, session_resolver=lambda *_a, **_kw: None,
-                                         profile_resolver=lambda _key: named) == 1
-            sealed = [item.read_bytes() for item in _spool_files(spool_home) if item != spool]
-            assert len(sealed) == 1 and b"sealed_v1" in sealed[0] and held.encode() not in sealed[0]
+            later = "later-shutdown@example.org"
+            assert flush_overflow_to_file({route: [held, later]}, session_resolver=lambda *_a, **_kw: None,
+                                         profile_resolver=lambda _key: named) == 2
+            sealed = [item for item in _spool_files(spool_home) if item != spool]
+            assert len(sealed) == 2
+            assert all(b"sealed_v1" in item.read_bytes() and held.encode() not in item.read_bytes() for item in sealed)
             assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: None)[0] == 0
+            assert len(_spool_files(spool_home)) == 3
+            first = next(item for item in sealed if json.loads(item.read_bytes())["seq"] == 0)
+            original = first.read_bytes()
+            changed = json.loads(original)
+            changed["data"]["sealed_v1"] = "AAAA"
+            first.write_text(json.dumps(changed))
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 1
             assert len(_spool_files(spool_home)) == 2
+            first.write_bytes(original)
             assert recover_pending_spool(db, session_resolver=resolver)[0] == 2
             with _profile_runtime_scope(named):
                 from agent.protected_request import session_request_keybox
 
                 box = session_request_keybox(db, "original")
                 rows = db.get_messages_as_conversation("original")
-                assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == (address, held)
+                assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == (
+                    address, held, later,
+                )
     finally:
         reset_multiplex_context(token)

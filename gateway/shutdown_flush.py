@@ -435,12 +435,14 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
     # Sessions whose spool replay already failed this pass -> files held back for them. Ordering is a
     # per-session property, so one unhealthy session must not hold back the others.
     blocked_sessions: dict[str, int] = {}
+    blocked_routes: set[str] = set()
     try:
         for path in flush_files:
             if path in _REPLAYED_UNREMOVABLE:
                 continue
             # One unparseable payload or rejected append must only skip THIS file: the file is
             # never unlinked, so aborting the pass would re-poison every later boot.
+            protected_route = None
             try:
                 payload = json.loads(path.read_text(encoding="utf-8-sig"))
                 # Agent-history snapshots use a different schema (reason +
@@ -448,13 +450,25 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
                 # not automatic DB insertion. Skip them silently.
                 if payload.get("reason") == AGENT_HISTORY_REASON:
                     continue
+                route = payload.get("session_key")
+                if isinstance(route, str) and route in blocked_routes:
+                    continue
+                data = payload.get("data")
+                if isinstance(route, str) and isinstance(data, dict) and (
+                    payload.get("replay_session") or "sealed_v1" in data
+                ):
+                    protected_route = route
                 if _recover_one_payload(session_db, path, payload,
                                         session_resolver=session_resolver,
                                         blocked_sessions=blocked_sessions):
                     recovered += 1
                     _remove_replayed(path, payload.get("session_key", ""))
+                elif protected_route:
+                    blocked_routes.add(protected_route)
             # health: allow BLE001 -- per-file boundary moved unchanged from recover_pending_to_db; a traceback per locked-DB file would only add noise
             except Exception as exc:
+                if protected_route:
+                    blocked_routes.add(protected_route)
                 logger.warning("Failed to recover pending message from %s: %s", path, exc)
     finally:
         if own_db:  # shutdown cancellation/interrupt must not strand an owned DB
