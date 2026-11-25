@@ -105,3 +105,48 @@ def test_auxiliary_compression_projects_prompt_and_returned_summary(monkeypatch)
     summary = compressor._call_summary_llm("Summarize fixture@example.org", 0.0)
     assert observed == [{"role": "user", "content": "Summarize [email-marker]"}]
     assert summary == "Recall [email-marker]"
+
+
+def test_protected_transport_buffers_complete_response(monkeypatch):
+    from agent import protected_request
+    from agent.turn_api_call import perform_api_call
+
+    monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: Projector())
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("protected request reached a raw streaming or relay callback")
+
+    monkeypatch.setattr("hermes_cli.middleware.run_llm_execution_middleware", unexpected)
+    requests = []
+    agent = SimpleNamespace(
+        api_mode="chat_completions",
+        _interruptible_streaming_api_call=unexpected,
+        _interruptible_api_call=lambda kwargs: requests.append(kwargs) or "complete",
+        _has_pending_redirect=lambda: False,
+    )
+    verdict = perform_api_call(
+        agent, api_kwargs={"stream": True, "messages": [{"content": "fixture@example.org"}]},
+        _original_api_kwargs={}, _llm_middleware_trace=[], _moa_prepared_request=None,
+        _retry=None, thinking_spinner=None, retry_count=0, api_call_count=1,
+        api_request_id="req", effective_task_id="task", turn_id="turn", interrupted=False,
+    )
+    assert verdict.response == "complete"
+    assert requests == [{"messages": [{"content": "[email-marker]"}]}]
+
+
+def test_complete_response_projects_full_text_and_refuses_unrestorable_tool_call():
+    from agent.protected_request import project_complete_response
+
+    message = SimpleNamespace(
+        content="Write to fixture@example.org", reasoning="Saw fixture@example.org",
+        provider_data={"reasoning_content": "Keep fixture@example.org"}, tool_calls=None,
+    )
+    project_complete_response(Projector(), message)
+    assert message.content == "Write to [email-marker]"
+    assert message.reasoning == "Saw [email-marker]"
+    assert message.provider_data["reasoning_content"] == "Keep [email-marker]"
+    message.tool_calls = [SimpleNamespace(function=SimpleNamespace(
+        arguments='{"recipient":"fixture@example.org"}',
+    ))]
+    with pytest.raises(ProtectedReplayError):
+        project_complete_response(Projector(), message)

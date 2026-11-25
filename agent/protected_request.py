@@ -74,6 +74,23 @@ def project_observer_history(keybox, messages, user_text):
         raise ProtectedReplayError("Protected request history could not be projected") from None
 
 
+def project_complete_response(keybox, assistant_message):
+    """Project a complete provider message before it reaches response sinks."""
+    if keybox is None:
+        return
+    try:
+        assistant_message.content = _project(keybox, assistant_message.content)
+        assistant_message.reasoning = _project(keybox, getattr(assistant_message, "reasoning", None))
+        assistant_message.provider_data = _project(keybox, getattr(assistant_message, "provider_data", None))
+        for call in assistant_message.tool_calls or ():
+            arguments = call.function.arguments
+            projected = _project(keybox, {"arguments": arguments})["arguments"]
+            if projected != arguments or (isinstance(arguments, str) and "[[CONVO_SAFE:" in arguments):
+                raise ProtectedReplayError("Protected tool arguments require local restoration")
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected provider response could not be projected") from None
+
+
 def project_compression_input(compressor, history):
     """Project structured records before the compressor serializes them."""
     keybox = session_request_keybox(compressor._session_db, compressor._session_id)
