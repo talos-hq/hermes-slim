@@ -335,7 +335,9 @@ class SessionCompressionMixin:
         carried = {key: value for key, value in _parse_model_config(parent["model_config"]).items()
                    if continuation and key in _CONVERSATION_MODEL_CONFIG_KEYS}
         model_config = {**carried, **(model_config or {})}
-        system_prompt_hash = self._store_system_prompt(conn, system_prompt)
+        from hermes_state_replay import project_session_prompt
+        system_prompt_hash = self._store_system_prompt(conn, project_session_prompt(
+            self, conn, child_session_id, system_prompt, model_config=model_config))
         # Copy a real creating surface. Automatic compression passes the parent's live
         # label (``local`` after the peer refresh); reset, branch and the compress
         # mutation pass the policy label. ``local`` and ``unknown`` are not surfaces,

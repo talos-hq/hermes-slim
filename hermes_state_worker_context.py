@@ -4,6 +4,7 @@ Identity and lineage remain owner-reserved. This is not arbitrary SessionDB RPC.
 """
 import json
 
+from hermes_state_replay import project_session_prompt
 from hermes_state_runtime import RuntimeStoreError
 
 
@@ -31,7 +32,7 @@ def worker_prompt(db, conn, session_id, payload):
             payload['system_prompt'] is None or isinstance(payload['system_prompt'], str)):
         raise RuntimeStoreError('invalid_params')
     conn.execute('UPDATE sessions SET system_prompt_hash=?, system_prompt=NULL WHERE id=?',
-                 (db._store_system_prompt(conn, payload['system_prompt']), session_id))
+                 (db._store_system_prompt(conn, project_session_prompt(db, conn, session_id, payload['system_prompt'])), session_id))
     db._delete_unreferenced_system_prompts(conn)
     return {'value': None}
 

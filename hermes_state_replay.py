@@ -112,6 +112,17 @@ def transcript_write_keybox(db_path, conn, session_id):
     return None
 
 
+def project_session_prompt(db, conn, session_id, prompt, *, model_config=None):
+    """Use the current binding, or the binding being published with a new child."""
+    if prompt is None:
+        return None
+    if model_config and REPLAY_BINDING_KEY in model_config:
+        keybox = _open_sidecar(db.db_path, session_id, model_config[REPLAY_BINDING_KEY], writable=True)
+    else:
+        keybox = transcript_write_keybox(db.db_path, conn, session_id)
+    return prompt if keybox is None else _project_value(keybox, prompt)
+
+
 def _project_value(keybox, value):
     if isinstance(value, str):
         return keybox.redact_model_text(keybox.replay_session, value, redact_email=True)

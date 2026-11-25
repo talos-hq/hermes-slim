@@ -418,6 +418,11 @@ class SessionSessionsMixin:
         self._insert_session_row(session_id, source, **kwargs)
         return session_id
 
+    def create_protected_session(self, session_id: str, source: str, **kwargs) -> str:
+        """Create a protected session before accepting transcript data."""
+        from hermes_state_replay_init import create_protected_session
+        return create_protected_session(self, session_id, source, **kwargs)
+
     def ensure_session(self, session_id: str, source: str = "unknown", model: str | None = None, **kwargs) -> str:
         """Ensure a session row exists (upsert). Accepts optional kwargs."""
         self._insert_session_row(session_id, source, model=model, **kwargs)
@@ -694,10 +699,12 @@ class SessionSessionsMixin:
 
     def update_system_prompt(self, session_id: str, system_prompt: Optional[str]) -> None:
         """Store the full assembled system prompt snapshot."""
+        from hermes_state_replay import project_session_prompt
+
         def _do(conn):
             conn.execute(
                 "UPDATE sessions SET system_prompt_hash = ?, system_prompt = NULL WHERE id = ?",
-                (self._store_system_prompt(conn, system_prompt), session_id),
+                (self._store_system_prompt(conn, project_session_prompt(self, conn, session_id, system_prompt)), session_id),
             )
             self._delete_unreferenced_system_prompts(conn)
         self._execute_write(_do)
