@@ -174,3 +174,28 @@ def test_signed_binding_keeps_fallbacks_redacted_without_sqlite(tmp_path, monkey
     with pytest.raises(ProtectedReplayError, match="could not be verified"):
         divert_session_transcript_jsonl("saved", [record])
     assert len(log.read_text().splitlines()) == 1
+
+
+def test_initialize_protected_session_commits_binding_and_projects_system_prompt(tmp_path, monkeypatch):
+    from hermes_state_replay_init import create_protected_session
+
+    binding = {"scope": 2, "lineage": "fixture-lineage", "sidecar": "fixture-sidecar"}
+
+    class Projector:
+        replay_session = 2
+
+        def redact_model_text(self, _scope, value, *, redact_email):
+            assert redact_email
+            return value.replace("fixture@example.org", "[email-marker]")
+
+    monkeypatch.setattr("hermes_state_replay_init._prepare_sidecar", lambda *_: (binding, Projector()))
+    monkeypatch.setattr("hermes_state_replay_init._open_sidecar", lambda *_, **__: Projector())
+    monkeypatch.setattr("hermes_state_replay_init.remember_fallback_binding", lambda *_: None)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        assert db.create_protected_session("new", "test", system_prompt="Contact fixture@example.org.") == "new"
+        assert db.get_session_model_config_value("new", "replay_binding") == binding
+        assert db.get_session("new")["system_prompt"] == "Contact [email-marker]."
+        assert create_protected_session(db, "new", "test") == "new"
+        db.create_session("existing", "test")
+        with pytest.raises(ProtectedReplayError, match="Existing session"):
+            db.create_protected_session("existing", "test")

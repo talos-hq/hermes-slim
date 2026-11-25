@@ -418,6 +418,11 @@ class SessionSessionsMixin:
         self._insert_session_row(session_id, source, **kwargs)
         return session_id
 
+    def create_protected_session(self, session_id: str, source: str, **kwargs) -> str:
+        """Create a protected session before accepting transcript data."""
+        from hermes_state_replay_init import create_protected_session
+        return create_protected_session(self, session_id, source, **kwargs)
+
     def ensure_session(self, session_id: str, source: str = "unknown", model: str | None = None, **kwargs) -> str:
         """Ensure a session row exists (upsert). Accepts optional kwargs."""
         self._insert_session_row(session_id, source, model=model, **kwargs)
