@@ -89,8 +89,12 @@ def perform_api_call(
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
 
     _use_streaming = _should_stream(agent)
+    from agent.protected_request import project_request, request_keybox
+
+    keybox = request_keybox(agent)
 
     def _perform_api_call(next_api_kwargs):
+        next_api_kwargs = project_request(keybox, next_api_kwargs)
         if agent.api_mode == "codex_responses":
             from agent.codex_responses_adapter import drops_replay_item_ids
 
