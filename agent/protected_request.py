@@ -44,14 +44,20 @@ def _project(keybox, value, *, protocol=True):
         raise ProtectedReplayError("Protected provider request contains opaque reasoning")
     projected = {}
     for name, item in value.items():
+        safe_name = _project(keybox, name, protocol=False)
+        if protocol and safe_name != name:
+            raise ProtectedReplayError("Protected request contains a sensitive protocol key")
         if protocol and name in _PROTOCOL_KEYS:
+            if _project(keybox, item, protocol=False) != item:
+                raise ProtectedReplayError("Protected request contains a sensitive protocol identifier")
             projected[name] = item
         elif protocol and name == "arguments" and isinstance(item, str):
             decoded = json.loads(item)
             safe = _project_value(keybox, decoded)
             projected[name] = item if safe == decoded else json.dumps(safe)
         else:
-            safe_name = name if protocol else _project(keybox, name, protocol=False)
+            if safe_name in projected:
+                raise ProtectedReplayError("Protected object keys collide after redaction")
             projected[safe_name] = _project(keybox, item, protocol=protocol)
     return projected
 

@@ -55,7 +55,14 @@ def _text_fields(messages):
         if isinstance(value, str):
             yield value
         elif isinstance(value, dict):
-            pending.extend(value.values())
+            pending.extend(value)
+            for name, item in value.items():
+                if name == "arguments" and isinstance(item, str) and "[[CONVO_SAFE:" in item:
+                    try:
+                        item = json.loads(item)
+                    except ValueError:
+                        pass
+                pending.append(item)
         elif isinstance(value, (list, tuple)):
             pending.extend(value)
 
@@ -188,7 +195,13 @@ def _project_value(keybox, value):
     if isinstance(value, list):
         return [_project_value(keybox, item) for item in value]
     if isinstance(value, dict):
-        return {key: _project_value(keybox, item) for key, item in value.items()}
+        projected = {}
+        for name, item in value.items():
+            safe_name = _project_value(keybox, name)
+            if safe_name in projected:
+                raise ProtectedReplayError("Protected object keys collide after redaction")
+            projected[safe_name] = _project_value(keybox, item)
+        return projected
     return value
 
 

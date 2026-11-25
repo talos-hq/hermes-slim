@@ -104,6 +104,22 @@ def test_configured_literal_survives_projection_and_exact_restore(tmp_path, monk
         assert box.restore_strict(box.replay_session, content, 1024) == f"Use {token}."
         db.append_message("fixture", "user", content=request["messages"][0]["content"])
         assert db.get_messages_as_conversation("fixture")[-1]["content"] == content
+        args = {"nested": {token: token}}
+        tool_request = {"messages": [{"role": "assistant", "tool_calls": [
+            {"id": "call-fixture", "function": {"name": "lookup", "arguments": json.dumps(args)}}
+        ]}]}
+        safe_call = project_request(box, tool_request)["messages"][0]["tool_calls"][0]
+        assert safe_call["id"] == "call-fixture" and safe_call["function"]["name"] == "lookup"
+        safe_args = json.loads(safe_call["function"]["arguments"])
+        (safe_key,) = safe_args["nested"]
+        assert safe_key == safe_args["nested"][safe_key]
+        assert box.restore_strict(box.replay_session, safe_key, 1024) == token
+        db.append_message("fixture", "assistant", tool_calls=tool_request["messages"][0]["tool_calls"])
+        history = db.get_messages_as_conversation("fixture")
+        assert history[-1]["tool_calls"][0]["function"]["arguments"] == safe_call["function"]["arguments"]
+        tool_request["messages"][0]["tool_calls"][0]["id"] = token
+        with pytest.raises(ProtectedReplayError):
+            project_request(box, tool_request)
         monkeypatch.delenv("FIXTURE_TOKEN")
         with pytest.raises(ProtectedReplayError):
             project_request(box, request)
