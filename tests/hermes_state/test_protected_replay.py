@@ -226,3 +226,20 @@ def test_lost_binding_cannot_downgrade_reads_writes_or_requests(tmp_path, persis
         with pytest.raises(ProtectedReplayError, match="missing its saved replay binding"):
             session_request_keybox(db, "saved")
         assert [row["content"] for row in db.get_messages("saved")] == ["redacted fixture"]
+
+
+def test_sessions_command_initializes_protected_store(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    from hermes_cli.subcommands.sessions import build_sessions_parser, cmd_sessions_lazy
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(SessionDB, "create_protected_session", lambda db, sid, source: calls.append((db.db_path, sid, source)))
+    parser = argparse.ArgumentParser()
+    build_sessions_parser(parser.add_subparsers(), cmd_sessions=cmd_sessions_lazy)
+    args = parser.parse_args(["sessions", "create-protected"])
+    assert args.func(args) == 0
+    session_id = capsys.readouterr().out.strip()
+    assert session_id
+    assert calls == [(tmp_path / "state.db", session_id, "cli")]

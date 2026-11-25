@@ -49,6 +49,7 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
         "sessions", help="Manage session history (list, rename, export, prune, delete)",
         description="View and manage the SQLite session store")
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
+    sessions_subparsers.add_parser("create-protected", help="Create a session with a protected transcript")
 
     sessions_list = sessions_subparsers.add_parser("list", help="List recent sessions")
     sessions_list.add_argument("--source", help="Filter by source (cli, telegram, discord, etc.)")
