@@ -41,3 +41,27 @@ def test_nonretryable_401_result_classifies_as_auth_for_the_ui():
     assert surface["layer"] == LAYER_AUTH
     assert surface["retryable"] is False
     assert surface["auth_kind"] == "oauth"
+
+
+def test_nonretryable_result_and_log_project_provider_error(monkeypatch, caplog):
+    from types import SimpleNamespace
+
+    from agent import protected_request
+
+    email = "fixture@example.org"
+    keybox = SimpleNamespace(
+        replay_session="fixture",
+        redact_model_text=lambda _session, text, **_: text.replace(email, "[email-marker]"),
+    )
+    monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: keybox)
+    error = RuntimeError(f"Provider echoed {email}")
+    classified = classify_api_error(error, provider="custom", model="m")
+    result = nonretryable_client_error_result(
+        _Agent(), error, classified, status_code=400, api_kwargs=None, api_messages=[], messages=[],
+        conversation_history=None, api_call_count=1, approx_tokens=10, provider="custom",
+        base_url="https://example.invalid", model="m",
+    )
+    assert email not in str(result)
+    assert email not in caplog.text
+    assert "[email-marker]" in str(result)
+    assert "[email-marker]" in caplog.text
