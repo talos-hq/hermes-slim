@@ -88,10 +88,10 @@ def perform_api_call(
         nonlocal thinking_spinner
         thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
 
-    _use_streaming = _should_stream(agent)
     from agent.protected_request import project_request, request_keybox
 
     keybox = request_keybox(agent)
+    _use_streaming = keybox is None and _should_stream(agent)
 
     def _perform_api_call(next_api_kwargs):
         next_api_kwargs = project_request(keybox, next_api_kwargs)
@@ -106,6 +106,9 @@ def perform_api_call(
             return agent._interruptible_streaming_api_call(
                 next_api_kwargs, on_first_delta=_stop_spinner
             )
+        if keybox is not None:
+            next_api_kwargs.pop("stream", None)
+            return agent._interruptible_api_call(next_api_kwargs)
         from agent import relay_llm
 
         return relay_llm.execute(
@@ -140,7 +143,7 @@ def perform_api_call(
         if _model_request_active is not None:
             _model_request_active.set()
     try:
-        response = run_llm_execution_middleware(
+        response = _perform_api_call(api_kwargs) if keybox is not None else run_llm_execution_middleware(
             api_kwargs, _perform_api_call, original_request=_original_api_kwargs,
             task_id=effective_task_id, turn_id=turn_id, api_request_id=api_request_id,
             session_id=agent.session_id or "", platform=agent.platform or "", model=agent.model,
