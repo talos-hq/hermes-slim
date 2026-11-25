@@ -1524,14 +1524,20 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         per-request repair forever), preserving summary markers before repair so derivative context
         cannot merge with an original user turn; the stored transcript is never mutated."""
         display = include_compacted and not include_inactive  # removed rows too: see drop_removed
+        session_ids = self._resume_lineage_ids(session_id) if include_ancestors else [session_id]
         rows = self._fetch_conversation_rows(
-            self._resume_lineage_ids(session_id) if include_ancestors else [session_id],
+            session_ids,
             self._active_clause(include_inactive, include_compacted), with_session_id=False, with_compacted=display)
         if include_compacted:
             rows = self._dedupe_display_generations(rows, drop_removed=display)
-        return self._rows_to_conversation(rows, session_id=session_id, include_ancestors=include_ancestors,
+        messages = self._rows_to_conversation(rows, session_id=session_id, include_ancestors=include_ancestors,
             repair_alternation=repair_alternation, include_row_ids=include_row_ids,
             include_summary_markers=repair_alternation)
+        if not include_compacted:
+            from hermes_state_replay import validate_replay_history
+
+            validate_replay_history(self, session_id, session_ids, messages)
+        return messages
 
     def conversation_revision(self, session_id: str, include_ancestors: bool = False) -> tuple:
         """A cheap fingerprint of what ``get_messages_as_conversation`` (live rows) would load: the
@@ -1675,8 +1681,9 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         read as deleted even though every row is still on disk, and the REST transcript read (which has
         always included them) disagreed with this one about the same session (#92080).
         """
+        session_ids = self._resume_lineage_ids(session_id)
         rows = self._fetch_conversation_rows(
-            self._resume_lineage_ids(session_id), "", with_session_id=True, with_compacted=True)
+            session_ids, "", with_session_id=True, with_compacted=True)
         # The model projection stays active-only: it is the compressed working context. The gateway's
         # first-turn ``session_meta`` marker (tools/model/platform bookkeeping) is transcript logging,
         # never LLM input: a resuming surface that fed it to the agent would count it in the history
@@ -1685,6 +1692,9 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
             [r for r in rows if r["session_id"] == session_id and r["active"] and r["role"] != "session_meta"],
             session_id=session_id,
             include_ancestors=False, repair_alternation=True, include_row_ids=True, include_summary_markers=True)
+        from hermes_state_replay import validate_replay_history
+
+        validate_replay_history(self, session_id, session_ids, model_history)
         display_history = self._rows_to_conversation(
             self._dedupe_display_generations(rows, drop_removed=True), session_id=session_id,
             include_ancestors=True, repair_alternation=False, include_row_ids=True)
