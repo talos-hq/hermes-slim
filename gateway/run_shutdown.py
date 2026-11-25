@@ -1134,10 +1134,11 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                 # to a JSON recovery snapshot rather than lose it. Non-fatal.
                 logger.warning(
                     "Shutdown transcript flush failed (%s); preserving %d in-memory message(s) to recovery snapshot",
-                    _flush_err, len(_session_messages),
+                    type(_flush_err).__name__, len(_session_messages),
                 )
                 from gateway.shutdown_flush import flush_agent_history_to_file
-                flush_agent_history_to_file(getattr(agent, "session_id", None), _session_messages)
+                flush_agent_history_to_file(getattr(agent, "session_id", None), _session_messages,
+                                            db_path=getattr(getattr(agent, "_session_db", None), "db_path", None))
 
     async def _finalize_shutdown_agents(self, active_agents: dict[str, Any]) -> None:
         for session_key, agent in active_agents.items():

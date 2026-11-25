@@ -659,7 +659,7 @@ def recover_gateway_pending(runner) -> int:
     return recovered
 
 
-def flush_agent_history_to_file(session_id: Optional[str], history: list) -> None:
+def flush_agent_history_to_file(session_id: Optional[str], history: list, *, db_path=None) -> None:
     """Best-effort dump of an agent's in-memory transcript before teardown. Used when
     ``_flush_messages_to_session_db`` raises (e.g. FTS/SQLite corruption): the transcript is written
     outside the broken DB so an operator can salvage it after repairing state.db. Failures are
@@ -667,7 +667,10 @@ def flush_agent_history_to_file(session_id: Optional[str], history: list) -> Non
     if not history:
         return
     try:
-        flush_dir = _get_flush_dir()
+        from hermes_state import _default_db_path
+        from hermes_state_replay_fallback import project_fallback_records
+
+        db_path = db_path or _default_db_path()
         snapshot = []
         for _m in history:
             try:
@@ -675,10 +678,12 @@ def flush_agent_history_to_file(session_id: Optional[str], history: list) -> Non
                 snapshot.append(_m if plain else str(_m))
             except Exception:
                 continue
-        _write_payload(flush_dir, {
-            "reason": AGENT_HISTORY_REASON, "issue": "#72680",
-            "session_id": session_id, "count": len(snapshot), "messages": snapshot,
-        })
+        with _pending_profile_scope(db_path.parent):
+            protected, _ = project_fallback_records(db_path, session_id or "", snapshot)
+            _write_payload(_get_flush_dir(), {
+                "reason": AGENT_HISTORY_REASON, "issue": "#72680",
+                "session_id": session_id, "count": len(protected), "messages": protected,
+            })
         logger.warning("Preserved %d in-memory message(s) for session %s "
                        "(possible FTS corruption — recover after repairing state.db)",
                        len(snapshot), session_id)
