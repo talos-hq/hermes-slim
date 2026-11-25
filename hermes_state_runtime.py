@@ -142,13 +142,13 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
         _text(value)
     if intent not in ('queue', 'steer', 'redirect'):
         raise RuntimeStoreError('invalid_params')
-    encoded = _json(payload)
+    canonical_payload = json.loads(_json(payload))
     from hermes_state_terminal import retry_terminal_admission
     retired = retry_terminal_admission(db, epoch=epoch, principal_id=principal_id, session_id=session_id,
         request_id=request_id, payload=payload, intent=intent)
     if retired is not None:
         return retired
-    digest = admission_fingerprint(canonical_target=session_id, payload={'input': json.loads(encoded), 'intent': intent})
+    digest = admission_fingerprint(canonical_target=session_id, payload={'input': canonical_payload, 'intent': intent})
     def write(conn):
         _epoch(conn, epoch)
         _session(conn, session_id)
@@ -168,6 +168,8 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
             raise RuntimeStoreError('queue_full')
         if _authorize_write is not None:
             _authorize_write(conn)
+        from hermes_state_replay import project_session_prompt
+        encoded = _json(project_session_prompt(db, conn, session_id, canonical_payload))
         admission_id = uuid.uuid4().hex
         conn.execute('''INSERT INTO session_admissions(admission_id,request_id,principal_id,
             target_session_id,lineage_json,payload_json,payload_digest,intent,status,owner_epoch)
