@@ -24,6 +24,7 @@ from hermes_state_common import (
     _json_or, _legacy_reset_child_sql, _placeholders, _sql_json_extract)
 from hermes_state_compaction_display import later_tool_copy_ids, not_a_later_tool_copy_sql
 from hermes_state_detached_results import SessionDetachedResultsMixin
+from hermes_state_replay import project_transcript_row, transcript_write_keybox
 from hermes_state_todo import SessionTodoResultMixin
 from hermes_state_identity import (
     _absorbed_uids_json, _restore_identity_columns, _stable_tool_key, _tool_call_uid_map, _tool_call_uid_or_none, _tool_call_uids_json, _uid_list)
@@ -409,17 +410,18 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         that keeps the message as a live dict already stamped on it (``stamp_message_uid``); minted when
         absent, but then only the row carries it."""
         msg = dict(locals())  # every keyword above is a message-dict field of the same name
-        # Encode outside the write txn (display metadata first: log-order parity).
-        msg["display_metadata"] = self._encode_display_metadata(display_metadata)
+        # Parse before taking the write lock. Protected values are projected after the guard.
         tool_calls = _parse_tool_calls(tool_calls)
         message_timestamp = _coerce_timestamp(timestamp, time.time())
         stamp_message_uid(msg)  # a fresh occurrence: mint its durable id
         self._stamp_tool_call_uids(msg, tool_calls, {})
-        params = self._message_row_params(
-            session_id, role, msg, tool_calls, message_timestamp, keep_reasoning=True)
         def _do(conn):
             self._check_transcript_write_guards(conn, session_id, compression_lock_holder,
                 turn_lease_holder=turn_lease_holder, turn_lease_ttl_seconds=turn_lease_ttl_seconds)
+            box = transcript_write_keybox(self.db_path, conn, session_id)
+            safe_msg, safe_calls = project_transcript_row(box, msg, tool_calls)
+            params = self._message_row_params(
+                session_id, role, safe_msg, safe_calls, message_timestamp, keep_reasoning=True)
             msg_id = conn.execute(_INSERT_MESSAGE_SQL, params).lastrowid
             self._bump_session_counters(conn, session_id, 1, _tool_calls_count(tool_calls), unit=True)
             return msg_id
@@ -453,15 +455,24 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         self._check_transcript_write_guards(conn, session_id, compression_lock_holder,
             turn_lease_holder=turn_lease_holder, turn_lease_ttl_seconds=turn_lease_ttl_seconds)
         from agent.transcript_repair import resolve_and_repair_transcript_batch
+
+        box = transcript_write_keybox(self.db_path, conn, session_id)
+
+        def encode_projected(content):
+            safe_msg, _ = project_transcript_row(box, {"content": content}, None)
+            return self._encode_content(safe_msg["content"])
+
+        def serialize_projected(msg, timestamp):
+            safe_msg, safe_calls = project_transcript_row(box, msg, _parse_tool_calls(msg.get("tool_calls")))
+            return self._serialized_message_row(session_id, {**safe_msg, "tool_calls": safe_calls}, timestamp)
+
         inserted_rows = resolve_and_repair_transcript_batch(
             conn,
             session_id,
             messages,
-            encode_content_fn=self._encode_content,
+            encode_content_fn=encode_projected,
             decode_content_fn=self._decode_content,
-            serialize_message_fn=lambda msg, timestamp: self._serialized_message_row(
-                session_id, msg, timestamp
-            ),
+            serialize_message_fn=serialize_projected,
             decode_row_fn=self._decoded_repair_row,
         )
         inserted, tool_calls_total = self._insert_message_rows(conn, session_id, inserted_rows)
@@ -665,6 +676,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         now_ts = time.time()
         inserted = tool_calls_total = 0
         batch_tool_index: dict[str, str] = {}
+        box = transcript_write_keybox(self.db_path, conn, session_id)
         for msg in messages:
             role = msg.get("role", "unknown")
             tool_calls = _parse_tool_calls(msg.get("tool_calls"))
@@ -674,8 +686,9 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
             # the live dict never disagree. Tool calls get their per-occurrence ids the same way.
             stamp_message_uid(msg)
             self._stamp_tool_call_uids(msg, tool_calls, batch_tool_index)
+            safe_msg, safe_calls = project_transcript_row(box, msg, tool_calls)
             cur = conn.execute(_INSERT_MESSAGE_SQL, self._message_row_params(
-                session_id, role, msg, tool_calls, message_timestamp, keep_reasoning=role == "assistant"))
+                session_id, role, safe_msg, safe_calls, message_timestamp, keep_reasoning=role == "assistant"))
             # Keep the caller's live row aligned with the durable identity. Rows created without an explicit
             # timestamp (notably mid-turn steers) may be carried through several compaction generations; if
             # the generated timestamp exists only in SQLite, every copy receives a new identity and renders
@@ -1049,14 +1062,18 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         the same input. ``display_metadata``, when given, replaces the row's (and clears ``api_content``)."""
         if not session_id or isinstance(row_id, bool) or not isinstance(row_id, int) or row_id <= 0:
             return 0
-        if display_metadata is None:
-            return self._write_rowcount(
-                "UPDATE messages SET content = ? WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1",
-                (self._encode_content(content), row_id, session_id))
-        return self._write_rowcount(
-            "UPDATE messages SET content = ?, api_content = NULL, display_metadata = ? "
-            "WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1",
-            (self._encode_content(content), self._encode_display_metadata(display_metadata), row_id, session_id))
+
+        def _do(conn):
+            box = transcript_write_keybox(self.db_path, conn, session_id)
+            safe, _ = project_transcript_row(box, {"content": content, "display_metadata": display_metadata}, None)
+            encoded = self._encode_content(safe["content"])
+            where = "WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1"
+            if display_metadata is None:
+                return conn.execute(f"UPDATE messages SET content = ? {where}", (encoded, row_id, session_id)).rowcount
+            return conn.execute(f"UPDATE messages SET content = ?, api_content = NULL, display_metadata = ? {where}",
+                (encoded, self._encode_display_metadata(safe["display_metadata"]), row_id, session_id)).rowcount
+
+        return self._execute_write(_do)
 
     def deactivate_message(self, session_id: str, row_id: int) -> int:
         """Deactivate ONE known row (id-addressed, idempotent; returns the affected row count). Used by

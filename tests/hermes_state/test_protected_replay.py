@@ -69,3 +69,40 @@ def test_unbound_child_cannot_replay_protected_ancestor(tmp_path):
         )
         with pytest.raises(ProtectedReplayError, match="lineage has no replay binding"):
             db.get_messages_as_conversation("child", include_ancestors=True)
+
+
+def test_protected_sqlite_writes_project_and_keep_tool_pairing(tmp_path, monkeypatch):
+    class Projector:
+        replay_session = 1
+
+        def redact_model_text(self, scope, value, *, redact_email):
+            assert scope == self.replay_session and redact_email
+            return value.replace("fixture@example.org", "[email-marker]")
+
+    monkeypatch.setattr(hermes_state_replay, "_open_sidecar", lambda *args, **kwargs: Projector())
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("saved", "test")
+        db.patch_session_model_config("saved", {"replay_binding": {"scope": 1}})
+        row_id = db.append_message("saved", "user", content="fixture@example.org")
+        assert db.set_user_message_content("saved", row_id, "Updated fixture@example.org") == 1
+        db.append_messages_batch("saved", [
+            {"role": "assistant", "tool_calls": [{
+                "id": "call-id", "function": {"name": "mail", "arguments": '{"to": "fixture@example.org"}'},
+            }]},
+            {"role": "tool", "tool_call_id": "call-id", "content": "fixture@example.org"},
+        ])
+        rows = db.get_messages("saved")
+        assert rows[0]["content"] == "Updated [email-marker]"
+        assert rows[1]["tool_calls"][0]["id"] == rows[2]["tool_call_id"] == "call-id"
+        assert "[email-marker]" in rows[1]["tool_calls"][0]["function"]["arguments"]
+        assert rows[2]["content"] == "[email-marker]"
+
+
+def test_unavailable_sidecar_prevents_protected_write(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_cli.config.get_env_value", lambda _name: None)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("saved", "test")
+        db.patch_session_model_config("saved", {"replay_binding": {"scope": 1}})
+        with pytest.raises(ProtectedReplayError):
+            db.append_message("saved", "user", content="private fixture")
+        assert db.get_messages("saved") == []

@@ -1,5 +1,6 @@
 """Verify the encrypted sidecar before replaying a protected transcript."""
 
+import json
 from hashlib import sha256
 from pathlib import Path
 
@@ -43,8 +44,7 @@ def validate_replay_history(db, session_id, session_ids, messages):
         raise ProtectedReplayError("Protected transcript lineage has no replay binding")
 
 
-def verify_protected_replay(db_path, session_id, binding, messages):
-    """Authenticate the exact sidecar and the references in saved messages."""
+def _open_sidecar(db_path, session_id, binding, *, writable=False):
     from hermes_cli.config import get_env_value
 
     try:
@@ -54,8 +54,67 @@ def verify_protected_replay(db_path, session_id, binding, messages):
         if len(serialized_key) != 64:
             raise ValueError("invalid Keybox key length")
         master_key = bytes.fromhex(serialized_key)
-        keybox = open_bound_replay(replay_log_path(db_path, session_id), master_key, binding)
+        return open_bound_replay(replay_log_path(db_path, session_id), master_key, binding, writable=writable)
+    except (ImportError, OSError, ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected transcript replay could not be verified") from None
+
+
+def verify_protected_replay(db_path, session_id, binding, messages):
+    """Authenticate the exact sidecar and the references in saved messages."""
+    keybox = _open_sidecar(db_path, session_id, binding)
+    try:
         for value in _text_fields(messages):
             keybox.validate_references(keybox.replay_session, value)
     except (ImportError, OSError, ValueError, RuntimeError):
         raise ProtectedReplayError("Protected transcript replay could not be verified") from None
+
+
+def transcript_write_keybox(db_path, conn, session_id):
+    """Resolve the binding in the same SQLite transaction as the protected write."""
+    from hermes_state_sessions import _parse_model_config
+
+    row = conn.execute("SELECT model_config FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    config = _parse_model_config(row[0]) if row is not None else {}
+    if REPLAY_BINDING_KEY in config:
+        return _open_sidecar(db_path, session_id, config[REPLAY_BINDING_KEY], writable=True)
+    return None
+
+
+def _project_value(keybox, value):
+    if isinstance(value, str):
+        return keybox.redact_model_text(keybox.replay_session, value, redact_email=True)
+    if isinstance(value, list):
+        return [_project_value(keybox, item) for item in value]
+    if isinstance(value, dict):
+        return {key: _project_value(keybox, item) for key, item in value.items()}
+    return value
+
+
+def _project_calls(keybox, calls):
+    if not isinstance(calls, list):
+        return _project_value(keybox, calls)
+    projected = []
+    for call in calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+            serialized = function["arguments"]
+            arguments = json.loads(serialized)
+            safe = _project_value(keybox, arguments)
+            call = {**call, "function": {**function, "arguments": serialized if safe == arguments else json.dumps(safe)}}
+        projected.append(call)
+    return projected
+
+
+def project_transcript_row(keybox, message, tool_calls):
+    """Project stored text without changing the occurrence or tool pairing IDs."""
+    if keybox is None:
+        return message, tool_calls
+    try:
+        projected = dict(message)
+        for field in ("content", "api_content", "reasoning", "reasoning_content", "reasoning_details",
+                      "codex_reasoning_items", "codex_message_items", "display_metadata"):
+            if field in message:
+                projected[field] = _project_value(keybox, message[field])
+        return projected, _project_calls(keybox, tool_calls)
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected transcript could not be projected") from None
