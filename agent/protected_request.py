@@ -2,7 +2,7 @@
 
 import json
 
-from hermes_state_replay import REPLAY_BINDING_KEY, ProtectedReplayError, _open_sidecar, _project_value
+from hermes_state_replay import REPLAY_BINDING_KEY, ProtectedReplayError, _open_sidecar, _project_value, project_replay_text
 from hermes_state_replay import require_replay_binding_if_recorded
 
 # These fields belong to the transport. They do not carry transcript text.
@@ -33,7 +33,7 @@ def session_request_keybox(store, session_id):
 
 def _project(keybox, value, *, protocol=True):
     if isinstance(value, str):
-        return keybox.redact_model_text(keybox.replay_session, value, redact_email=True)
+        return project_replay_text(keybox, value)
     if isinstance(value, (tuple, list)):
         return [_project(keybox, item, protocol=protocol) for item in value]
     if not isinstance(value, dict):

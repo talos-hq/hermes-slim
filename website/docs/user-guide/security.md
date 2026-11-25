@@ -746,6 +746,16 @@ Error messages from MCP tools are sanitized before being returned to the LLM. Th
 - Bearer tokens
 - `token=`, `key=`, `API_KEY=`, `password=`, `secret=` parameters
 
+### Exact secret matching for protected sessions
+
+For a profile using Convo Safe protected sessions, set
+`HERMES_CONVO_SAFE_LITERAL_KEYS` to a comma-separated list of secret setting
+names. For example, set it to `INTERNAL_SERVICE_TOKEN,REPORT_API_TOKEN` and
+provision both values through the profile's secret configuration. Hermes
+replaces exact matches with reversible credential markers before the automatic
+scanner runs. A missing listed value blocks protected text projection. Keep
+the list available to every process that writes or resumes protected sessions.
+
 ### Website Access Policy
 
 You can restrict which websites the agent can access through its web and browser tools. This is useful for preventing the agent from accessing internal services, admin panels, or other sensitive URLs.

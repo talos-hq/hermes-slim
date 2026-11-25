@@ -1,11 +1,14 @@
 """Verify the encrypted sidecar before replaying a protected transcript."""
 
 import json
+import re
 from hashlib import sha256
 from pathlib import Path
 
 REPLAY_BINDING_KEY = "replay_binding"
 _MASTER_KEY_ENV = "HERMES_CONVO_SAFE_MASTER_KEY"
+_LITERAL_KEYS_ENV = "HERMES_CONVO_SAFE_LITERAL_KEYS"
+_REPLAY_MARKERS = re.compile(r"(\[\[CONVO_SAFE:[^\n]*?\]\])")
 
 
 class ProtectedReplayError(RuntimeError):
@@ -152,9 +155,36 @@ def project_session_prompt(db, conn, session_id, prompt, *, model_config=None):
     return prompt if keybox is None else _project_value(keybox, prompt)
 
 
+def project_replay_text(keybox, text):
+    """Apply automatic detection and exact matches for opted-in profile secrets."""
+    from hermes_cli.config import get_env_value
+
+    configured = get_env_value(_LITERAL_KEYS_ENV)
+    if not configured:
+        return keybox.redact_model_text(keybox.replay_session, text, redact_email=True)
+    values = set()
+    for name in configured.split(","):
+        name = name.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ProtectedReplayError("Protected literal redaction key list is invalid")
+        value = get_env_value(name)
+        if not value or "[[CONVO_SAFE:" in value:
+            raise ProtectedReplayError("A protected literal redaction value is unavailable or invalid")
+        values.add(value)
+    literals = re.compile("|".join(re.escape(value) for value in sorted(values, key=len, reverse=True)))
+
+    def redact_match(match):
+        return keybox.get_or_create(keybox.replay_session, "CREDENTIAL", match[0])
+
+    parts = _REPLAY_MARKERS.split(text)
+    for index in range(0, len(parts), 2):
+        parts[index] = literals.sub(redact_match, parts[index])
+    return keybox.redact_model_text(keybox.replay_session, "".join(parts), redact_email=True)
+
+
 def _project_value(keybox, value):
     if isinstance(value, str):
-        return keybox.redact_model_text(keybox.replay_session, value, redact_email=True)
+        return project_replay_text(keybox, value)
     if isinstance(value, list):
         return [_project_value(keybox, item) for item in value]
     if isinstance(value, dict):

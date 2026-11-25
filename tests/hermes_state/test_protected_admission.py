@@ -81,3 +81,29 @@ def test_protected_rehome_requires_a_destination_with_the_queued_mappings(tmp_pa
         assert moved["payload"] == queued["payload"]
         box = session_request_keybox(db, "next")
         assert box.restore_strict(box.replay_session, moved["payload"]["text"], 1024) == email
+
+
+def test_configured_literal_survives_projection_and_exact_restore(tmp_path, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from agent.protected_request import project_request, session_request_keybox
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    monkeypatch.setenv("HERMES_CONVO_SAFE_LITERAL_KEYS", "FIXTURE_TOKEN, FIXTURE_PREFIX")
+    token = "opaque fixture suffix@example.org"
+    monkeypatch.setenv("FIXTURE_TOKEN", token)
+    monkeypatch.setenv("FIXTURE_PREFIX", "opaque fixture")
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_protected_session("fixture", "test")
+        box = session_request_keybox(db, "fixture")
+        request = {"messages": [{"role": "user", "content": f"Use {token}."}]}
+        safe = project_request(box, request)
+        content = safe["messages"][0]["content"]
+        assert token not in content and "suffix@example.org" not in content
+        assert content.count("[[CONVO_SAFE:") == 1
+        assert project_request(box, safe) == safe
+        assert box.restore_strict(box.replay_session, content, 1024) == f"Use {token}."
+        db.append_message("fixture", "user", content=request["messages"][0]["content"])
+        assert db.get_messages_as_conversation("fixture")[-1]["content"] == content
+        monkeypatch.delenv("FIXTURE_TOKEN")
+        with pytest.raises(ProtectedReplayError):
+            project_request(box, request)
