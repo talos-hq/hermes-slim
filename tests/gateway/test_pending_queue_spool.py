@@ -284,6 +284,7 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
     pytest.importorskip("convo_safe.replay")
     from agent.secret_scope import reset_multiplex_context, set_multiplex_context
     from gateway.run import _profile_runtime_scope
+    from gateway.shutdown_sealed_spool import seal_pending
     from gateway.shutdown_flush import flush_overflow_to_file, flush_pending_to_file, recover_pending_spool
     from hermes_state import SessionDB
 
@@ -311,6 +312,18 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
             assert len(sealed) == 2
             assert all(b"sealed_v1" in item.read_bytes() and held.encode() not in item.read_bytes() for item in sealed)
             assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: None)[0] == 0
+            assert len(_spool_files(spool_home)) == 3
+            other = spool_home / "profiles" / "other"
+            other.mkdir()
+            (other / ".env").write_text(f"HERMES_CONVO_SAFE_MASTER_KEY={'22' * 32}\n")
+            resolved_spool = spool.with_suffix(".held")
+            spool.rename(resolved_spool)
+            with SessionDB(db_path=other / "state.db") as other_db:
+                with _profile_runtime_scope(other):
+                    other_db.create_protected_session("original", "test")
+                    seal_pending({"text": "different profile"}, {"session_key": route})
+                assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: ("original", other_db))[0] == 0
+            resolved_spool.rename(spool)
             assert len(_spool_files(spool_home)) == 3
             first = next(item for item in sealed if json.loads(item.read_bytes())["seq"] == 0)
             original = first.read_bytes()

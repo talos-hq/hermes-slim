@@ -30,6 +30,14 @@ def _origin_json(source) -> Optional[str]:
         return None
 
 
+def _flush_time_covers_session(finished_at, started_at):
+    if finished_at is None or started_at is None:
+        return True
+    if type(finished_at) is int:  # legacy spool files only recorded whole seconds
+        return math.floor(float(started_at)) <= finished_at
+    return float(started_at) <= float(finished_at)
+
+
 class SessionRecoveryMixin:
     """SessionStore durable-row recovery and the SQLite side of routing transitions."""
 
@@ -209,9 +217,9 @@ class SessionRecoveryMixin:
         db = self._db_for_key(session_key)
         if db is None:
             return None
-        session_id = self.peek_session_id(session_key)
-        if session_id:
-            return session_id, db
+        entry = self.lookup_by_session_key(session_key)
+        if entry and _flush_time_covers_session(not_after, entry.created_at.timestamp()):
+            return entry.session_id, db
         parts = str(session_key).split(":")
         platform = parts[2] if len(parts) >= 3 and parts[0] == "agent" else None
         if not platform:
@@ -223,9 +231,7 @@ class SessionRecoveryMixin:
         if not isinstance(row, dict) or not row.get("id"):
             return None
         started_at = row.get("started_at")
-        # ``ts`` is ``int(time.time())`` while ``started_at`` is a REAL, so compare whole seconds:
-        # a row minted in the same second as the flush is still a valid origin.
-        if not_after is not None and started_at is not None and math.floor(float(started_at)) > int(not_after):
+        if not _flush_time_covers_session(not_after, started_at):
             return None
         return str(row["id"]), db
 

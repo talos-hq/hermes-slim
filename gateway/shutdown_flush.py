@@ -140,7 +140,7 @@ def flush_pending_to_file(pending: dict[str, Any], *, reason: str = "shutdown",
     """Serialise non-empty ``_pending_messages`` slots (``MessageEvent`` or str); return count."""
     if not pending:
         return 0
-    flush_dir, ts, flushed = _get_flush_dir(), int(time.time()), 0
+    flush_dir, ts, flushed = _get_flush_dir(), time.time(), 0
     for session_key, value in list(pending.items()):
         if value is not None:
             flushed += _flush_value(flush_dir, "pending", session_key, value, session_resolver=session_resolver,
@@ -160,7 +160,7 @@ def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str =
     """
     if not overflow_by_session:
         return 0
-    flush_dir, ts, flushed = _get_flush_dir(), int(time.time()), 0
+    flush_dir, ts, flushed = _get_flush_dir(), time.time(), 0
     for session_key, events in list(overflow_by_session.items()):
         if not session_key or not events:
             continue

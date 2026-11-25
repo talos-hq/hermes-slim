@@ -131,6 +131,16 @@ def test_protected_reset_publishes_bound_row_before_changing_the_route(tmp_path,
         assert db.get_session(child.session_id)["parent_session_id"] == "parent"
 
 
+def test_shutdown_resolver_refuses_cached_route_created_after_flush(tmp_path):
+    db = _db_with_rows({})
+    store = _make_store(tmp_path, db)
+    key = store._generate_session_key(_source())
+    entry = _seed_entry(store, key, "replacement")
+    started = entry.created_at.timestamp()
+    assert store.resolve_session_id_for_key(key, not_after=started - 0.001) is None
+    assert store.resolve_session_id_for_key(key, not_after=started + 0.001) == ("replacement", db)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
