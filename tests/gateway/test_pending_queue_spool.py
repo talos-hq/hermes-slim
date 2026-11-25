@@ -225,3 +225,26 @@ class TestSpoolPrimitives:
         assert remaining == 0
         assert seen == ["c0", "c1", "c2"]
         assert _spool_files(spool_home) == []
+
+
+def test_failed_diversion_keeps_only_unwritten_records(monkeypatch):
+    from hermes_state_errors import StateDbReplacedError
+
+    store = _make_store(None)
+    saved = {"role": "user", "content": "already spooled"}
+    unsaved = {"role": "assistant", "content": "needs a retry"}
+    concurrent = {"role": "user", "content": "arrived during diversion"}
+    store._dirty_transcripts["queue"] = [saved, unsaved]
+
+    def spool(_session_id, message):
+        return "spooled.json" if message is saved else None
+
+    def divert(_session_id, messages):
+        assert messages == [saved, unsaved]
+        store._dirty_transcripts["queue"] = [concurrent]
+        raise OSError("fixture write failure")
+
+    monkeypatch.setattr("gateway.session_transcript._spool_dropped", spool)
+    monkeypatch.setattr("hermes_state.divert_session_transcript_jsonl", divert)
+    store._divert_transcript_after_db_replaced("saved", "queue", StateDbReplacedError("fixture"))
+    assert store._dirty_transcripts["queue"] == [unsaved, concurrent]

@@ -212,8 +212,10 @@ class SessionTranscriptMixin:
             remaining = list(self._dirty_transcripts.get(queue_session_id, []))
             self._dirty_transcripts.pop(queue_session_id, None)
             self._transcript_append_failures.pop(session_id, None)
+        unsaved = []
         for dropped in remaining:
             if _spool_dropped(session_id, dropped) is None:
+                unsaved.append(dropped)
                 logger.warning(
                     "pending fallback failed for replaced state.db transcript on %s", session_id,
                     exc_info=True)
@@ -221,6 +223,10 @@ class SessionTranscriptMixin:
             from hermes_state import divert_session_transcript_jsonl
             divert_session_transcript_jsonl(session_id, remaining)
         except Exception:
+            if unsaved:
+                with self._transcript_retry_lock:
+                    pending = self._dirty_transcripts.setdefault(queue_session_id, [])
+                    pending[:0] = unsaved
             logger.warning(
                 "JSONL divert failed for replaced state.db transcript on %s", session_id,
                 exc_info=True)
