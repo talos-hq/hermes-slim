@@ -112,6 +112,18 @@ def project_tool_result(agent, result):
         raise ProtectedReplayError("Protected tool result could not be projected") from None
 
 
+def protected_tool_arguments(agent, arguments):
+    """Return safe observer arguments and whether dispatch would require restoration."""
+    keybox = request_keybox(agent)
+    if keybox is None:
+        return arguments, False
+    try:
+        projected = _project(keybox, arguments, protocol=False)
+    except (ValueError, RuntimeError):
+        return {}, True
+    return projected, projected != arguments or "[[CONVO_SAFE:" in json.dumps(projected)
+
+
 def project_compression_input(compressor, history):
     """Project structured records before the compressor serializes them."""
     keybox = session_request_keybox(compressor._session_db, compressor._session_id)
