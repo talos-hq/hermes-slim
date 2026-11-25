@@ -49,3 +49,37 @@ def test_opaque_inputs_and_raw_observer_history():
     history, user = project_observer_history(keybox, [{"content": "fixture@example.org"}], "fixture@example.org")
     assert history == [{"content": "[email-marker]"}]
     assert user == "[email-marker]"
+
+
+def test_request_middleware_sees_projected_input_and_its_output_is_projected(monkeypatch):
+    from agent.turn_api_request import build_request_payload
+
+    monkeypatch.setattr("agent.turn_api_request.request_keybox", lambda _agent: Projector())
+    monkeypatch.setattr("agent.conversation_loop._redecorate_prompt_cache_for_provider",
+                        lambda _agent, messages, **kwargs: (messages, None, kwargs["tools_for_api"]))
+    monkeypatch.setattr("agent.turn_api_request.strip_images_for_rejecting_model", lambda *_: None)
+    monkeypatch.setattr("agent.turn_api_request.observe_request_tools", lambda *_: None)
+    monkeypatch.setattr("agent.turn_api_request.sanitize_outbound_kwargs", lambda *_: None)
+
+    def middleware(payload, **_kwargs):
+        assert payload["messages"][0]["content"] == "[email-marker]"
+        return SimpleNamespace(
+            payload={**payload, "instructions": "middleware fixture@example.org"},
+            original_payload=payload,
+            trace=[],
+        )
+
+    monkeypatch.setattr("hermes_cli.middleware.apply_llm_request_middleware", middleware)
+    agent = SimpleNamespace(
+        session_id="bound", model="provider/model", provider="openrouter", base_url="",
+        api_mode="chat_completions", platform="cli", tools=[], _empty_content_retries=0,
+        _reset_stream_delivery_tracking=lambda: None, _reapply_reasoning_echo_for_provider=lambda _: None,
+        _build_api_kwargs=lambda messages: {"messages": messages},
+    )
+    result = build_request_payload(
+        agent, api_messages=[{"role": "user", "content": "fixture@example.org"}],
+        _moa_prepared_request=None, tools_for_api=[], system_message="", api_call_count=1,
+        api_request_id="one", effective_task_id="test", turn_id="turn",
+    )
+    assert result.api_kwargs["instructions"] == "middleware [email-marker]"
+    assert result.api_messages[0]["content"] == "[email-marker]"

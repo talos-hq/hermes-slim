@@ -179,6 +179,7 @@ def build_request_payload(
     api_kwargs = project_request(keybox, api_kwargs)
     if keybox is not None:
         _original_api_kwargs = project_request(keybox, _original_api_kwargs)
+        api_messages, _llm_middleware_trace = project_observer_history(keybox, api_messages, _llm_middleware_trace)
     return ApiRequestBuild(
         "fallthrough", api_messages, _moa_prepared_request, tools_for_api, api_kwargs,
         _original_api_kwargs, _llm_middleware_trace, keybox,
@@ -202,7 +203,6 @@ def build_api_request(
     )
     api_kwargs, api_messages, _moa_prepared_request = built.api_kwargs, built.api_messages, built._moa_prepared_request
     messages, original_user_message = project_observer_history(built._protected_keybox, messages, original_user_message)
-    api_messages, _ = project_observer_history(built._protected_keybox, api_messages, None)
     _fire_pre_api_request_hook(
         agent, api_kwargs, api_messages, built._llm_middleware_trace, messages=messages,
         original_user_message=original_user_message, approx_tokens=approx_tokens,
