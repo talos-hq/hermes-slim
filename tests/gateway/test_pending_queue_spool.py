@@ -285,6 +285,7 @@ def test_shutdown_drain_does_not_acknowledge_volatile_protected_input(spool_home
     pytest.importorskip("convo_safe.replay")
     from types import SimpleNamespace
     from gateway.run_busy import GatewayBusySessionMixin
+    from gateway.run_inbound import GatewayInboundMixin
     from hermes_state import SessionDB
 
     monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
@@ -314,6 +315,11 @@ def test_shutdown_drain_does_not_acknowledge_volatile_protected_input(spool_home
             assert asyncio.run(GatewayBusySessionMixin._queue_command_turn(
                 runner, key, object(), object(), object(), ack="queued",
             )) is expected
+        protected_followup = SimpleNamespace(internal=False, get_command=lambda: None)
+        response = asyncio.run(GatewayInboundMixin._hm_handle_running_session_message(
+            runner, protected_followup, None, "protected",
+        ))
+        assert "unavailable" in response.lower()
     assert queue == ["plain", "plain"]
     assert "queued" not in replies[0].lower()
     assert "queued" in replies[1].lower()
