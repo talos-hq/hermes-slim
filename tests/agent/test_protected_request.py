@@ -83,3 +83,25 @@ def test_request_middleware_sees_projected_input_and_its_output_is_projected(mon
     )
     assert result.api_kwargs["instructions"] == "middleware [email-marker]"
     assert result.api_messages[0]["content"] == "[email-marker]"
+
+
+def test_auxiliary_compression_projects_prompt_and_returned_summary(monkeypatch):
+    from agent.context_compressor import ContextCompressor
+
+    monkeypatch.setattr("agent.context_compressor.get_model_context_length", lambda *_: 100_000)
+    monkeypatch.setattr("agent.context_compressor.session_request_keybox", lambda *_: Projector())
+    observed = []
+
+    def call_llm(**kwargs):
+        assert kwargs["task"] == "compression"
+        observed.extend(kwargs["messages"])
+        return SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop",
+            message=SimpleNamespace(content="Recall fixture@example.org", reasoning_content=None),
+        )])
+
+    monkeypatch.setattr("agent.context_compressor.call_llm", call_llm)
+    compressor = ContextCompressor(model="test", quiet_mode=True)
+    summary = compressor._call_summary_llm("Summarize fixture@example.org", 0.0)
+    assert observed == [{"role": "user", "content": "Summarize [email-marker]"}]
+    assert summary == "Recall [email-marker]"

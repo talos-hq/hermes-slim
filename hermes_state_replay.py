@@ -61,17 +61,27 @@ def validate_replay_history(db, session_id, session_ids, messages):
         raise ProtectedReplayError("Protected transcript lineage has no replay binding")
 
 
-def _open_sidecar(db_path, session_id, binding, *, writable=False):
+def _master_key():
     from hermes_cli.config import get_env_value
 
+    serialized_key = get_env_value(_MASTER_KEY_ENV) or ""
+    if len(serialized_key) != 64:
+        raise ValueError("invalid Keybox key length")
+    return bytes.fromhex(serialized_key)
+
+
+def open_unbound_sidecar(path):
+    """Read identity from a freshly created sidecar during publication."""
+    from convo_safe import Keybox
+
+    return Keybox.open_replay(path, _master_key())
+
+
+def _open_sidecar(db_path, session_id, binding, *, writable=False):
     try:
         from convo_safe.replay import open_bound_replay
 
-        serialized_key = get_env_value(_MASTER_KEY_ENV) or ""
-        if len(serialized_key) != 64:
-            raise ValueError("invalid Keybox key length")
-        master_key = bytes.fromhex(serialized_key)
-        return open_bound_replay(replay_log_path(db_path, session_id), master_key, binding, writable=writable)
+        return open_bound_replay(replay_log_path(db_path, session_id), _master_key(), binding, writable=writable)
     except (ImportError, OSError, ValueError, RuntimeError):
         raise ProtectedReplayError("Protected transcript replay could not be verified") from None
 

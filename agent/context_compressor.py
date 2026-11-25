@@ -49,6 +49,7 @@ from agent.model_metadata import (
     strip_opaque_replay_items,
 )
 from agent.redact import redact_sensitive_text
+from agent.protected_request import project_compression_input, project_observer_history, session_request_keybox
 from agent.turn_context import drop_stale_api_content
 from tools.todo_tool import TODO_INJECTION_HEADER
 
@@ -3799,7 +3800,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         """Issue the single aux summary call; return validated content text.
         Raises RuntimeError for empty content or a length-truncated (PARTIAL) summary so the failure
         routes through main-model fallback + cooldown instead of wiping the compacted turns."""
-        # call_llm writes the route it actually selected; never pre-resolve a second, stale pair.
+        keybox = session_request_keybox(self._session_db, self._session_id)
+        prompt = project_observer_history(keybox, None, prompt)[1]
         _aux_route: dict[str, str] = {}
         call_kwargs: dict[str, Any] = {
             "task": "compression",
@@ -3811,7 +3813,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             # NO max_tokens: Anthropic/NIM wires forward it and a hard cap truncates summaries
             # (thinking models burn it on reasoning). Timeout comes from call_llm config.
         }
-        # Pinned route (stall fallback) replaces task routing so the retry leaves the stalled backend.
         self._apply_summary_route(call_kwargs, _pinned_summary_call_kwargs())
         # Compression is atomic: protect the in-flight summary call from a mid-turn gateway interrupt.
         # Without this, an incoming user message aborts the summary and compression falls back to a degraded
@@ -3880,7 +3881,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 f"Context compression summary was truncated ({_TRUNCATED_SUMMARY_MARKER}): generation hit the output "
                 f"token cap and the summary is incomplete {where}"
             )
-        return content
+        return project_observer_history(keybox, None, content)[1]
 
     def _generate_summary(
         self, turns_to_summarize: list[dict[str, Any]], focus_topic: Optional[str] = None,
@@ -3898,7 +3899,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                 self._summary_failure_cooldown_until - prompt_started_at,
             )
             return None
-        # Strict-redact inputs that bypass _serialize_for_summary (focus string, prior summary).
+        turns_to_summarize = project_compression_input(self, turns_to_summarize)
         if focus_topic:
             focus_topic = _redact_compaction_text(focus_topic)
         if self._previous_summary:
@@ -3928,7 +3929,6 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             # The summarizer may echo secrets verbatim; redact the output too.
             summary = _redact_compaction_text(content.strip())
             # Restore any [SKILL_PRUNED] marker the summarizer paraphrased away.
-            # See #32106.
             summary = _reinject_pruned_skill_markers(summary, _pruned_skill_names)
             summary = self._ground_historical_task_snapshot(summary, turns_to_summarize)
             summary = self._augment_summary_lean(summary, turns_to_summarize)
