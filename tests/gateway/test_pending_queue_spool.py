@@ -248,3 +248,33 @@ def test_failed_diversion_keeps_only_unwritten_records(monkeypatch):
     monkeypatch.setattr("hermes_state.divert_session_transcript_jsonl", divert)
     store._divert_transcript_after_db_replaced("saved", "queue", StateDbReplacedError("fixture"))
     assert store._dirty_transcripts["queue"] == [unsaved, concurrent]
+
+
+def test_shutdown_pending_and_overflow_bind_redacted_text_to_original_session(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from agent.protected_request import session_request_keybox
+    from gateway.shutdown_flush import flush_overflow_to_file, flush_pending_to_file, recover_pending_spool
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    addresses = ("pending-fixture@example.org", "overflow-fixture@example.org")
+    with SessionDB(db_path=spool_home / "state.db") as db:
+        db.create_protected_session("original", "test")
+        db.create_session("other", "test")
+        route = "agent:main:telegram:fixture"
+
+        def lookup(_route, **_kwargs):
+            return "original", db
+
+        assert flush_pending_to_file({route: addresses[0]}, session_resolver=lookup) == 1
+        assert flush_overflow_to_file({route: [addresses[1]]}, session_resolver=lookup) == 1
+        for path in _spool_files(spool_home):
+            contents = path.read_bytes()
+            assert b"[[CONVO_SAFE:" in contents
+            assert all(address.encode() not in contents for address in addresses)
+        assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: ("other", db))[0] == 0
+        assert len(_spool_files(spool_home)) == 2
+        assert recover_pending_spool(db, session_resolver=lookup)[0] == 2
+        rows = db.get_messages_as_conversation("original")
+        box = session_request_keybox(db, "original")
+        assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == addresses

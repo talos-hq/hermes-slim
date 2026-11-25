@@ -75,33 +75,53 @@ def _write_payload(flush_dir: Path, payload: dict[str, Any]) -> Path:
     return final_path
 
 
-def _flush_value(flush_dir: Path, kind: str, session_key: str, value: Any, **extra: Any) -> bool:
+def _project_pending(session_key, serialised, resolver, timestamp):
+    from agent.protected_request import session_request_keybox
+    from hermes_state import _default_db_path
+    from hermes_state_replay import _project_value
+    from hermes_state_replay_fallback import project_fallback_records
+
+    resolved = resolver(session_key, not_after=timestamp) if resolver is not None else None
+    if resolved and resolved[1] is not None:
+        session_id, db = resolved
+        keybox = session_request_keybox(db, session_id)
+        if keybox is None:
+            return serialised, {}
+        return _project_value(keybox, serialised), {"replay_session": session_id}
+    session_id = serialised.get("session_id") or session_key
+    records, protected_path = project_fallback_records(_default_db_path(), session_id, [serialised])
+    return records[0], {"replay_session": session_id} if protected_path is not None else {}
+
+
+def _flush_value(flush_dir: Path, kind: str, session_key: str, value: Any, *, session_resolver=None, **extra: Any) -> bool:
     """Serialise and write one pending value; return True when a payload was written."""
     try:
         serialised = _serialise_value(value)
         if serialised is None:
             return False
-        _write_payload(flush_dir, {"session_key": session_key, **extra, "data": serialised})
+        projected, replay = _project_pending(session_key, serialised, session_resolver, extra.get("ts"))
+        _write_payload(flush_dir, {"session_key": session_key, **extra, **replay, "data": projected})
         return True
     except Exception as exc:
         logger.debug("Failed to flush %s message for %s: %s", kind, session_key, exc)
         return False
 
 
-def flush_pending_to_file(pending: dict[str, Any], *, reason: str = "shutdown") -> int:
+def flush_pending_to_file(pending: dict[str, Any], *, reason: str = "shutdown", session_resolver=None) -> int:
     """Serialise non-empty ``_pending_messages`` slots (``MessageEvent`` or str); return count."""
     if not pending:
         return 0
     flush_dir, ts, flushed = _get_flush_dir(), int(time.time()), 0
     for session_key, value in list(pending.items()):
         if value is not None:
-            flushed += _flush_value(flush_dir, "pending", session_key, value, reason=reason, ts=ts)
+            flushed += _flush_value(flush_dir, "pending", session_key, value, session_resolver=session_resolver,
+                                    reason=reason, ts=ts)
     if flushed:
         logger.info("Flushed %d pending message(s) to %s (reason=%s)", flushed, flush_dir, reason)
     return flushed
 
 
-def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str = "shutdown") -> int:
+def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str = "shutdown", session_resolver=None) -> int:
     """Serialise the FIFO overflow tails (``queued_events``) to disk; return events flushed.
 
     The adapter slot holds the queue head and ``SessionState.conversation.queued_events`` the
@@ -116,7 +136,8 @@ def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str =
             continue
         for seq, value in enumerate(list(events)):
             if value is not None:
-                flushed += _flush_value(flush_dir, "overflow", session_key, value, reason=reason,
+                flushed += _flush_value(flush_dir, "overflow", session_key, value,
+                                        session_resolver=session_resolver, reason=reason,
                                         ts=ts, seq=seq)
     if flushed:
         logger.info("Flushed %d queued overflow message(s) to %s (reason=%s)", flushed, flush_dir,
@@ -426,7 +447,8 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
     # carry a session_id; a resolver-resolved payload goes to the resolver's db alone, never the
     # ambient root store (a None db from the resolver is not a fallback signal — it is "preserve").
     session_id, target_db = data.get("session_id", ""), session_db
-    if not session_id and session_resolver is not None:
+    replay_session = payload.get("replay_session")
+    if (not session_id or replay_session) and session_resolver is not None:
         try:
             resolved = session_resolver(session_key, not_after=payload.get("ts"))
         except Exception as exc:
@@ -434,6 +456,8 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
             resolved = None
         if resolved and resolved[1] is not None:
             session_id, target_db = resolved
+    if replay_session and replay_session != session_id:
+        return False
     if not session_id:
         logger.warning("Cannot recover pending message for %s: no session_id in flush file and "
                        "session_key-to-id resolution failed. "
