@@ -161,8 +161,9 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
                 # Native delivery reconciliation can return the already projected
                 # receipt for an exact retry. Authenticate the binding before
                 # accepting that representation in place of the original input.
-                if (intent != old['intent'] or _json(canonical_payload) != old['payload_json']
-                        or transcript_write_keybox(db.db_path, conn, session_id) is None):
+                keybox = transcript_write_keybox(db.db_path, conn, session_id) if intent == old['intent'] else None
+                from hermes_state_replay import _project_value
+                if keybox is None or _json(_project_value(keybox, canonical_payload)) != old['payload_json']:
                     raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
             if _replay_guard is not None:
                 _replay_guard(conn)
@@ -408,12 +409,21 @@ def rehome_queued_inputs(db, *, epoch: int, old_session_id: str, new_session_id:
         rows = conn.execute("SELECT * FROM session_admissions WHERE target_session_id=? AND status='queued' "
                             "AND substr(principal_id,1,?)=? ORDER BY seq",
                             (old_session_id, len(principal_prefix), principal_prefix)).fetchall()
+        from hermes_state_replay import ProtectedReplayError, _project_value, transcript_write_keybox
+
+        source = transcript_write_keybox(db.db_path, conn, old_session_id) if rows else None
+        destination = transcript_write_keybox(db.db_path, conn, new_session_id) if rows else None
+        if source is not None and destination is None:
+            raise ProtectedReplayError("Queued protected inputs require a protected destination")
         for row in rows:
+            payload = json.loads(row['payload_json'])
+            if destination is not None:
+                payload = _project_value(destination, payload)
             digest = admission_fingerprint(canonical_target=new_session_id, payload={
-                'input': json.loads(row['payload_json']), 'intent': row['intent']})
-            conn.execute("UPDATE session_admissions SET target_session_id=?,lineage_json=?,payload_digest=? "
+                'input': payload, 'intent': row['intent']})
+            conn.execute("UPDATE session_admissions SET target_session_id=?,lineage_json=?,payload_json=?,payload_digest=? "
                          "WHERE admission_id=? AND status='queued'",
-                         (new_session_id, json.dumps([new_session_id]), digest, row['admission_id']))
+                         (new_session_id, json.dumps([new_session_id]), _json(payload), digest, row['admission_id']))
         if rows:
             for sid in (old_session_id, new_session_id):
                 conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (sid,))

@@ -1169,7 +1169,9 @@ class SessionStore(
             entry = self._entry_locked(session_key)
             return dict(entry.model_override) if entry and entry.model_override else None
 
-    def reset_session(self, session_key: str, display_name: Optional[str] = None) -> Optional[SessionEntry]:
+    def reset_session(
+        self, session_key: str, display_name: Optional[str] = None, *, replay_owner_id: str | None = None,
+    ) -> Optional[SessionEntry]:
         """Force reset a session, creating a new session ID."""
         with self._lock:
             old_entry = self._entry_locked(session_key)
@@ -1185,6 +1187,23 @@ class SessionStore(
                 source_value=old_entry.platform.value if old_entry.platform else "unknown",
                 display_name=old_entry.display_name, parent_session_id=old_entry.session_id,
             )
+        if replay_owner_id is not None:
+            from agent.protected_request import protected_child_config
+            from hermes_state_replay import ProtectedReplayError
+
+            db = self._db_for_key(session_key)
+            config = db_create_kwargs["model_config"]
+            protected = protected_child_config(db, replay_owner_id, session_id, config)
+            if protected is config:
+                raise ProtectedReplayError("Protected reset lost its replay binding")
+            db_create_kwargs["model_config"] = protected
+            # Make the binding durable before a fresh route can admit input.
+            db.create_session(**db_create_kwargs)
+        with self._lock:
+            if self._entry_locked(session_key) is not old_entry:
+                if replay_owner_id is not None:
+                    raise ProtectedReplayError("Protected reset route changed before publication")
+                return self._entry_locked(session_key)
             new_entry = self._replace_route_locked(
                 session_key, old_entry, session_id, now,
                 display_name=display_name if display_name is not None else old_entry.display_name,

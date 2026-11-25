@@ -765,7 +765,15 @@ async def reset_and_rehome_messages(runner, session_key, old_session_id):
     chat_source = lane_source(live.source)  # the rotation detaches the old conversation off the route
 
     def rotate_and_move():
-        entry = runner.session_store.reset_session(session_key)
+        from hermes_state_replay import REPLAY_BINDING_KEY, require_replay_binding_if_recorded
+
+        missing = object()
+        binding = authority.db.get_session_model_config_value(old.session_id, REPLAY_BINDING_KEY, missing)
+        if binding is missing:
+            require_replay_binding_if_recorded(authority.db.db_path, old.session_id)
+            entry = runner.session_store.reset_session(session_key)
+        else:
+            entry = runner.session_store.reset_session(session_key, replay_owner_id=old.session_id)
         if entry is None:
             return None, None, []
         new = SessionRef(authority.profile_id, authority.logical_owner(entry.session_id))
