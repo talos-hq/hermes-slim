@@ -56,7 +56,8 @@ def _get_flush_dir():
 def _write_payload(flush_dir: Path, payload: dict[str, Any]) -> Path:
     """Atomically write one private, uniquely named recovery payload; return its path."""
     from utils import atomic_json_write
-    prefix = "pending-sealed" if "sealed_v1" in (payload.get("data") or {}) else "pending"
+    protected = payload.get("replay_tag") or "sealed_v1" in (payload.get("data") or {})
+    prefix = "pending-sealed" if protected else "pending"
     final_path = flush_dir / f"{prefix}-{uuid.uuid4().hex}.json"
     atomic_json_write(final_path, payload, mode=0o600, default=str)
     if os.name == "posix":
@@ -95,7 +96,7 @@ def _project_pending(serialised, resolver, profile_resolver, payload):
     from hermes_state_replay import ProtectedReplayError, _project_value
     from hermes_state_replay_fallback import project_fallback_records
     from hermes_cli.config import get_env_value
-    from gateway.shutdown_sealed_spool import seal_pending
+    from gateway.shutdown_sealed_spool import bind_pending, seal_pending
 
     session_key = payload["session_key"]
     resolved = resolver(session_key, not_after=payload.get("ts")) if resolver is not None else None
@@ -104,20 +105,22 @@ def _project_pending(serialised, resolver, profile_resolver, payload):
         with _pending_profile_scope(getattr(getattr(db, "db_path", None), "parent", None)):
             keybox = session_request_keybox(db, session_id)
             if keybox is None:
-                return serialised, {}
-            return _project_value(keybox, serialised), {"replay_session": session_id}
+                return {**payload, "data": serialised}
+            return bind_pending(_project_value(keybox, serialised), payload, session_id)
     home = profile_resolver(session_key) if profile_resolver is not None else None
     if home is None and is_multiplex_active():
         raise ProtectedReplayError("Pending message has no verified profile owner")
     with _pending_profile_scope(home):
         if get_env_value("HERMES_CONVO_SAFE_MASTER_KEY"):
-            return seal_pending(serialised, payload), {}
+            return {**payload, "data": seal_pending(serialised, payload)}
         db_path = _default_db_path()
         if (db_path.parent / "protected-transcripts").exists():
             raise ProtectedReplayError("Pending message cannot be saved without the profile master key")
         session_id = serialised.get("session_id") or session_key
         records, protected_path = project_fallback_records(db_path, session_id, [serialised])
-        return records[0], {"replay_session": session_id} if protected_path is not None else {}
+        if protected_path is not None:
+            return bind_pending(records[0], payload, session_id)
+        return {**payload, "data": records[0]}
 
 
 def _flush_value(flush_dir: Path, kind: str, session_key: str, value: Any, *,
@@ -128,8 +131,7 @@ def _flush_value(flush_dir: Path, kind: str, session_key: str, value: Any, *,
         if serialised is None:
             return False
         payload = {"session_key": session_key, **extra}
-        projected, replay = _project_pending(serialised, session_resolver, profile_resolver, payload)
-        _write_payload(flush_dir, {**payload, **replay, "data": projected})
+        _write_payload(flush_dir, _project_pending(serialised, session_resolver, profile_resolver, payload))
         return True
     except Exception as exc:
         logger.debug("Failed to flush %s message for %s: %s", kind, session_key, exc)
@@ -410,7 +412,7 @@ def _order_flush_files(paths, verified=None) -> list[Path]:
 
 def _authenticate_sealed_batch(paths, session_resolver):
     """Verify sealed metadata before it can influence the order of appends."""
-    from gateway.shutdown_sealed_spool import unseal_pending
+    from gateway.shutdown_sealed_spool import unseal_pending, verify_bound_pending
 
     verified = {}
     for path in paths:
@@ -421,7 +423,7 @@ def _authenticate_sealed_batch(paths, session_resolver):
                 return None
             continue
         data = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(data, dict) or "sealed_v1" not in data:
+        if not isinstance(data, dict) or ("sealed_v1" not in data and not payload.get("replay_tag")):
             if path.name.startswith("pending-sealed-"):
                 return None
             continue
@@ -430,7 +432,10 @@ def _authenticate_sealed_batch(paths, session_resolver):
             if not resolved or resolved[1] is None:
                 return None
             with _pending_profile_scope(resolved[1].db_path.parent):
-                unseal_pending(data, payload)
+                if "sealed_v1" in data:
+                    unseal_pending(data, payload)
+                else:
+                    verify_bound_pending(data, payload)
         except Exception:  # health: allow BLE001 -- unavailable profile, key or ciphertext must hold the queue
             logger.warning("Sealed pending queue could not be verified; preserving queued files")
             return None
@@ -491,7 +496,9 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
                 if isinstance(route, str) and route in blocked_routes:
                     continue
                 data = payload.get("data")
-                if isinstance(data, dict) and "sealed_v1" in data and (verified is None or path not in verified):
+                if isinstance(data, dict) and ("sealed_v1" in data or payload.get("replay_tag")) and (
+                    verified is None or path not in verified
+                ):
                     continue
                 if isinstance(route, str) and isinstance(data, dict) and (
                     payload.get("replay_session") or "sealed_v1" in data
@@ -590,13 +597,18 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
             if ((replay_session and replay_session != session_id)
                     or session_request_keybox(target_db, session_id) is None):
                 return False
-        if sealed:
-            from gateway.shutdown_sealed_spool import append_sealed_pending, unseal_pending
+        if sealed or replay_session:
+            from gateway.shutdown_sealed_spool import (
+                append_protected_pending, sealed_pending_receipt, unseal_pending, verify_bound_pending)
 
-            text = unseal_pending(data, payload).get("text", "")
+            if sealed:
+                text = unseal_pending(data, payload).get("text", "")
+                receipt = sealed_pending_receipt(data)
+            else:
+                receipt = verify_bound_pending(data, payload)
             if not text:
                 return False
-            append_sealed_pending(target_db, session_id, data, payload, text)
+            append_protected_pending(target_db, session_id, receipt, payload, text)
         else:
             target_db.append_message(session_id=session_id, role="user", content=text,
                                      timestamp=payload.get("ts", int(time.time())))

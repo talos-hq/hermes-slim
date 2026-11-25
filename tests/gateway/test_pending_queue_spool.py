@@ -373,7 +373,8 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
                 return "original", db
             assert flush_pending_to_file({route: address}, session_resolver=resolver) == 1
             (spool,) = _spool_files(spool_home)
-            assert address.encode() not in spool.read_bytes()
+            resolved_record = spool.read_bytes()
+            assert address.encode() not in resolved_record
             held = "unresolved-shutdown@example.org"
             later = "later-shutdown@example.org"
             assert flush_overflow_to_file({route: [held, later]}, session_resolver=lambda *_a, **_kw: None,
@@ -417,7 +418,8 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
             first.write_bytes(original)  # crash after commit and before the spool unlink
             duplicate = first.with_name("pending-sealed-duplicate.json")
             duplicate.write_bytes(original)
-            assert recover_pending_spool(db, session_resolver=resolver)[0] == 2
+            spool.write_bytes(resolved_record)
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 3
             assert not _spool_files(spool_home)
             with _profile_runtime_scope(named):
                 from agent.protected_request import session_request_keybox

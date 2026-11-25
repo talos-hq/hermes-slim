@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import uuid
 from pathlib import Path
 
 
@@ -42,12 +43,16 @@ def _context(payload, *, create=False):
     return _profile_identity(create=create) + metadata
 
 
-def _cipher():
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+def _key(label):
     from hermes_state_replay import _master_key
 
-    key = hmac.digest(_master_key(), b"hermes-shutdown-spool-v1", hashlib.sha256)
-    return AESGCM(key)
+    return hmac.digest(_master_key(), label, hashlib.sha256)
+
+
+def _cipher():
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    return AESGCM(_key(b"hermes-shutdown-spool-v1"))
 
 
 def seal_pending(data, payload):
@@ -63,10 +68,30 @@ def unseal_pending(data, payload):
     return json.loads(_cipher().decrypt(encrypted[:12], encrypted[12:], _context(payload)))
 
 
-def append_sealed_pending(db, session_id, data, payload, text):
+def sealed_pending_receipt(data):
+    return hashlib.sha256(base64.b64decode(data["sealed_v1"], validate=True)).hexdigest()
+
+
+def _bound_tag(data, payload, *, create=False):
+    content = json.dumps([payload["replay_session"], payload["replay_id"], data], sort_keys=True).encode()
+    return hmac.digest(_key(b"hermes-shutdown-bound-v1"), _context(payload, create=create) + content, "sha256").hex()
+
+
+def bind_pending(data, payload, session_id):
+    """Authenticate both the redacted content and its original destination."""
+    bound = {**payload, "replay_session": session_id, "replay_id": uuid.uuid4().hex}
+    return {**bound, "replay_tag": _bound_tag(data, bound, create=True), "data": data}
+
+
+def verify_bound_pending(data, payload):
+    if not hmac.compare_digest(payload["replay_tag"], _bound_tag(data, payload)):
+        raise ValueError("Invalid protected shutdown record")
+    return payload["replay_tag"]
+
+
+def append_protected_pending(db, session_id, receipt_id, payload, text):
     """Commit the replay receipt and its redacted message atomically."""
-    encrypted = base64.b64decode(data["sealed_v1"], validate=True)
-    receipt = "gateway.sealed_spool.v1." + hashlib.sha256(encrypted).hexdigest()
+    receipt = "gateway.sealed_spool.v1." + receipt_id
     messages = [{"role": "user", "content": text, "timestamp": payload.get("ts")}]
 
     def write(conn):
