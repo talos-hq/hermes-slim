@@ -303,14 +303,21 @@ def test_shutdown_drain_does_not_acknowledge_volatile_protected_input(spool_home
             _queue_or_replace_pending_event=lambda key, _event: queue.append(key),
             _status_action_gerund=lambda: "stopping",
             _send_busy_reply=reply,
+            _command_turn_admitted=lambda *_a: False,
+            _enqueue_fifo=lambda key, *_a: queue.append(key),
         )
         for key in ("protected", "plain"):
             asyncio.run(GatewayBusySessionMixin._send_busy_drain_notice(
                 runner, SimpleNamespace(source=None), key, "queue",
             ))
-    assert queue == ["plain"]
+        for key, expected in (("protected", True), ("plain", False)):
+            assert asyncio.run(GatewayBusySessionMixin._queue_command_turn(
+                runner, key, object(), object(), object(), ack="queued",
+            )) is expected
+    assert queue == ["plain", "plain"]
     assert "queued" not in replies[0].lower()
     assert "queued" in replies[1].lower()
+    assert "unavailable" in replies[2].lower()
 
 
 def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):

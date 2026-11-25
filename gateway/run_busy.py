@@ -991,6 +991,11 @@ class GatewayBusySessionMixin:
         # Queue as the next turn — skipped after a successful steer/redirect (the text is already in
         # the run and must NOT replay). FIFO gives each text its own turn (raw merge would join them).
         if not _steer.steered and not _steer.redirected:
+            from gateway.session_ingress import PROTECTED_QUEUE_UNAVAILABLE, allows_volatile_busy_queue
+
+            if not await asyncio.to_thread(allows_volatile_busy_queue, getattr(self, "session_store", None), session_key):
+                await self._send_busy_reply(event, adapter, PROTECTED_QUEUE_UNAVAILABLE)
+                return True
             self._queue_or_replace_pending_event(session_key, event)
         # Store the message so it's processed as the next turn after the current run finishes (or is
         # interrupted). Skip this for a successful steer — the text already landed inside the run and must
@@ -1309,6 +1314,11 @@ class GatewayBusySessionMixin:
         on the transport's earlier release or a refusal. False: the in-process slot (no authority),
         and the caller answers with ``ack`` itself."""
         if not self._command_turn_admitted(event, session_key):
+            from gateway.session_ingress import PROTECTED_QUEUE_UNAVAILABLE, allows_volatile_busy_queue
+
+            if not await asyncio.to_thread(allows_volatile_busy_queue, getattr(self, "session_store", None), session_key):
+                await self._send_busy_reply(command, adapter, PROTECTED_QUEUE_UNAVAILABLE)
+                return True
             self._enqueue_fifo(session_key, event, adapter)
             return False
         from gateway.session_ingress import dispatch_shared_busy
