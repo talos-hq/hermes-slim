@@ -699,10 +699,12 @@ class SessionSessionsMixin:
 
     def update_system_prompt(self, session_id: str, system_prompt: Optional[str]) -> None:
         """Store the full assembled system prompt snapshot."""
+        from hermes_state_replay import project_session_prompt
+
         def _do(conn):
             conn.execute(
                 "UPDATE sessions SET system_prompt_hash = ?, system_prompt = NULL WHERE id = ?",
-                (self._store_system_prompt(conn, system_prompt), session_id),
+                (self._store_system_prompt(conn, project_session_prompt(self, conn, session_id, system_prompt)), session_id),
             )
             self._delete_unreferenced_system_prompts(conn)
         self._execute_write(_do)

@@ -191,10 +191,14 @@ def test_initialize_protected_session_commits_binding_and_projects_system_prompt
     monkeypatch.setattr("hermes_state_replay_init._prepare_sidecar", lambda *_: (binding, Projector()))
     monkeypatch.setattr("hermes_state_replay_init._open_sidecar", lambda *_, **__: Projector())
     monkeypatch.setattr("hermes_state_replay_init.remember_fallback_binding", lambda *_: None)
+    monkeypatch.setattr("hermes_state_replay._open_sidecar", lambda *_, **__: Projector())
+    monkeypatch.setattr("hermes_state_replay_fallback.remember_fallback_binding", lambda *_: None)
     with SessionDB(db_path=tmp_path / "state.db") as db:
         assert db.create_protected_session("new", "test", system_prompt="Contact fixture@example.org.") == "new"
         assert db.get_session_model_config_value("new", "replay_binding") == binding
         assert db.get_session("new")["system_prompt"] == "Contact [email-marker]."
+        db.update_system_prompt("new", "Updated fixture@example.org.")
+        assert db.get_session("new")["system_prompt"] == "Updated [email-marker]."
         assert create_protected_session(db, "new", "test") == "new"
         db.create_session("existing", "test")
         with pytest.raises(ProtectedReplayError, match="Existing session"):
