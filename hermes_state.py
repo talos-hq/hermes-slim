@@ -437,17 +437,19 @@ def divert_session_transcript_jsonl(session_id: str, messages) -> Optional[Path]
     sid = str(session_id or "").strip()
     if not sid or not messages:
         return None
-    from hermes_state_replay import require_plaintext_fallback_allowed
+    from hermes_state_replay_fallback import project_fallback_records
 
-    require_plaintext_fallback_allowed(_default_db_path(), sid)
-    sessions_dir = get_hermes_home() / "sessions"
-    make_user_dir(sessions_dir, parents=True, exist_ok=True)
-    path = sessions_dir / f"{sid}.jsonl"
+    messages, protected_path = project_fallback_records(_default_db_path(), sid, messages)
+    path = protected_path or (get_hermes_home() / "sessions" / f"{sid}.jsonl")
+    make_user_dir(path.parent, parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         for msg in messages:
             if msg is not None:
                 record = msg if isinstance(msg, dict) else {"content": str(msg)}
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        if protected_path is not None:
+            handle.flush()
+            os.fsync(handle.fileno())
     return path
 
 

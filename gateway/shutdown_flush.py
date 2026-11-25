@@ -133,13 +133,13 @@ def spool_dropped_transcript_message(session_id: str, message: dict[str, Any]) -
     """
     try:
         from hermes_state import _default_db_path
-        from hermes_state_replay import require_plaintext_fallback_allowed
+        from hermes_state_replay_fallback import project_fallback_records
 
-        require_plaintext_fallback_allowed(_default_db_path(), session_id)
+        records, _ = project_fallback_records(_default_db_path(), session_id, [message])
         return _write_payload(_get_flush_dir(), {
             "session_key": session_id, "reason": TRANSCRIPT_CAP_DROP_REASON, "ts": int(time.time()),
             "seq": next(_TRANSCRIPT_SPOOL_SEQ),
-            "data": {"session_id": session_id, "message": message},
+            "data": {"session_id": session_id, "message": records[0]},
         })
     except Exception as exc:
         logger.debug("Failed to spool cap-dropped transcript message for %s: %s", session_id, exc)
