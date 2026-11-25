@@ -36,6 +36,27 @@ QUEUE_FULL_REPLY = ('⏳ Too many messages are already waiting in this conversat
                     'send this again after the current reply.')
 
 
+def allows_volatile_busy_queue(store, session_key):
+    """Keep protected routes on durable admission during a gateway drain."""
+    import sqlite3
+
+    from hermes_cli.config import get_env_value
+    from hermes_state_replay import ProtectedReplayError, REPLAY_BINDING_KEY, require_replay_binding_if_recorded
+
+    resolver = getattr(store, "resolve_session_id_for_key", None)
+    try:
+        resolved = resolver(session_key) if callable(resolver) else None
+        if resolved is None:
+            return not get_env_value("HERMES_CONVO_SAFE_MASTER_KEY")
+        session_id, db = resolved
+        if db.get_session_model_config_value(session_id, REPLAY_BINDING_KEY, None) is not None:
+            return False
+        require_replay_binding_if_recorded(db.db_path, session_id)
+    except (OSError, sqlite3.Error, ProtectedReplayError):
+        return False
+    return True
+
+
 async def admit_message(authority, event):
     from gateway.session_authority import messaging_admission
     accepted, committed = busy_acceptance.get(), busy_commit.get()

@@ -629,7 +629,11 @@ class GatewayBusySessionMixin:
         adapter = self._delivery_adapter_for(event.source)
         if not adapter:
             return
-        if self._queue_during_drain_enabled(effective_mode):
+        from gateway.session_ingress import allows_volatile_busy_queue
+
+        if self._queue_during_drain_enabled(effective_mode) and await asyncio.to_thread(
+            allows_volatile_busy_queue, getattr(self, "session_store", None), session_key,
+        ):
             self._queue_or_replace_pending_event(session_key, event)
             message = t("gateway.busy.drain_queued", action=self._status_action_gerund())
         else:

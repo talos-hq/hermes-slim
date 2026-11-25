@@ -8,6 +8,7 @@ successful transcript flush — not silently discarded (#78182, #82616).
 """
 import json
 import logging
+import asyncio
 import threading
 import time
 
@@ -278,6 +279,38 @@ def test_shutdown_pending_and_overflow_bind_redacted_text_to_original_session(sp
         rows = db.get_messages_as_conversation("original")
         box = session_request_keybox(db, "original")
         assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == addresses
+
+
+def test_shutdown_drain_does_not_acknowledge_volatile_protected_input(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from types import SimpleNamespace
+    from gateway.run_busy import GatewayBusySessionMixin
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    replies, queue = [], []
+
+    async def reply(_event, _adapter, message):
+        replies.append(message)
+
+    with SessionDB(db_path=spool_home / "state.db") as db:
+        db.create_protected_session("protected", "test")
+        db.create_session("plain", "test")
+        runner = SimpleNamespace(
+            session_store=SimpleNamespace(resolve_session_id_for_key=lambda key: (key, db)),
+            _delivery_adapter_for=lambda _source: object(),
+            _queue_during_drain_enabled=lambda _mode: True,
+            _queue_or_replace_pending_event=lambda key, _event: queue.append(key),
+            _status_action_gerund=lambda: "stopping",
+            _send_busy_reply=reply,
+        )
+        for key in ("protected", "plain"):
+            asyncio.run(GatewayBusySessionMixin._send_busy_drain_notice(
+                runner, SimpleNamespace(source=None), key, "queue",
+            ))
+    assert queue == ["plain"]
+    assert "queued" not in replies[0].lower()
+    assert "queued" in replies[1].lower()
 
 
 def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
