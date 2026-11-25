@@ -1519,7 +1519,12 @@ def dump_api_request_debug(
     agent, api_kwargs: dict[str, Any], *, reason: str, error: Optional[Exception] = None
 ) -> Optional[Path]:
     """Dump the request body from api_kwargs (minus transport keys) for debugging provider 4xx failures."""
+    from agent.protected_request import project_observer_history, request_keybox
+
+    protected = True
     try:
+        keybox = request_keybox(agent)
+        protected = keybox is not None
         body = {k: v for k, v in copy.deepcopy(api_kwargs).items() if v is not None and k != "timeout"}
         api_key = None
         # anthropic_messages keeps its SDK client on ``_anthropic_client`` (``client`` is None):
@@ -1555,6 +1560,9 @@ def dump_api_request_debug(
         # request body, so context-embedded secrets would otherwise land in cleartext on disk.
         from agent.redact import redact_sensitive_text
         _serialized = json.dumps(dump_payload, ensure_ascii=False, indent=2, default=str)
+        if keybox is not None:
+            projected, _ = project_observer_history(keybox, json.loads(_serialized), None, protocol=False)
+            _serialized = json.dumps(projected, ensure_ascii=False, indent=2)
         _redacted_payload = json.loads(redact_sensitive_text(_serialized, force=True))
         atomic_json_write(dump_file, _redacted_payload, default=str)
         agent._vprint(f"{agent.log_prefix}🧾 Request debug dump written to: {dump_file}")
@@ -1562,7 +1570,9 @@ def dump_api_request_debug(
             print(json.dumps(_redacted_payload, ensure_ascii=False, indent=2, default=str))
         return dump_file
     except Exception as dump_error:
-        if agent.verbose_logging:
+        if protected:
+            logger.warning("Could not write protected API request debug dump")
+        elif agent.verbose_logging:
             logger.warning("Failed to dump API request debug payload: %s", dump_error)
         return None
 

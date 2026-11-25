@@ -198,3 +198,25 @@ def test_trajectory_projects_input_and_rendered_export(monkeypatch):
         agent, [{"role": "user", "content": "fixture@example.org"}], "fixture@example.org", True,
     )
     assert exported == [{"from": "system", "value": "rendered [email-marker]"}]
+
+
+def test_request_dump_projects_provider_error_on_disk_and_stdout(monkeypatch, tmp_path, capsys):
+    from agent import protected_request
+    from agent.agent_runtime_helpers import dump_api_request_debug
+
+    monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: Projector())
+    monkeypatch.setenv("HERMES_DUMP_REQUEST_STDOUT", "1")
+    agent = SimpleNamespace(
+        session_id="fixture", logs_dir=tmp_path, api_mode="chat_completions", client=None,
+        base_url="https://example.invalid", log_prefix="", verbose_logging=True,
+        _mask_api_key_for_logs=lambda _: "masked", _vprint=lambda _: None,
+    )
+    email = "fixture@example.org"
+    error = Exception(email)
+    error.body = {email: {"id": email, "arguments": email}}
+    error.response = SimpleNamespace(status_code=400, text=email)
+    path = dump_api_request_debug(agent, {"messages": [{"content": email}]}, reason="failure", error=error)
+    assert path is not None
+    for output in (path.read_text(encoding="utf-8"), capsys.readouterr().out):
+        assert email not in output
+        assert output.count("[email-marker]") == 6

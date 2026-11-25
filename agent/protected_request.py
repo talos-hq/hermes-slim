@@ -51,7 +51,8 @@ def _project(keybox, value, *, protocol=True):
             safe = _project_value(keybox, decoded)
             projected[name] = item if safe == decoded else json.dumps(safe)
         else:
-            projected[name] = _project(keybox, item, protocol=protocol)
+            safe_name = name if protocol else _project(keybox, name, protocol=False)
+            projected[safe_name] = _project(keybox, item, protocol=protocol)
     return projected
 
 
@@ -66,12 +67,12 @@ def project_request(keybox, request):
         raise ProtectedReplayError("Protected provider request could not be projected") from None
 
 
-def project_observer_history(keybox, messages, user_text):
+def project_observer_history(keybox, messages, user_text, *, protocol=True):
     """Keep the request observer's history and user payload at the same boundary."""
     if keybox is None:
         return messages, user_text
     try:
-        return _project(keybox, messages), _project(keybox, user_text)
+        return _project(keybox, messages, protocol=protocol), _project(keybox, user_text, protocol=protocol)
     except (ValueError, RuntimeError):
         raise ProtectedReplayError("Protected request history could not be projected") from None
 
