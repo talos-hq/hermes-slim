@@ -18,6 +18,23 @@ def replay_log_path(db_path: Path, session_id: str) -> Path:
     return db_path.parent / "protected-transcripts" / filename
 
 
+def require_plaintext_fallback_allowed(db_path: Path, session_id: str) -> None:
+    """Block plaintext diversion when SQLite cannot supply a protected binding."""
+    from hermes_cli.config import get_env_value
+
+    if get_env_value(_MASTER_KEY_ENV):
+        raise ProtectedReplayError("Protected transcript requires a verified fallback")
+    log = replay_log_path(db_path, session_id)
+    sidecar = log.with_name(log.name + ".keybox.sqlite")
+    try:
+        sidecar.lstat()
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise ProtectedReplayError("Transcript protection could not be checked") from None
+    raise ProtectedReplayError("Protected transcript requires a verified fallback")
+
+
 def _text_fields(messages):
     pending = list(messages)
     while pending:

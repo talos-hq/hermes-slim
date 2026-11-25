@@ -132,6 +132,10 @@ def spool_dropped_transcript_message(session_id: str, message: dict[str, Any]) -
     discards user data while the process stays up (#78182).
     """
     try:
+        from hermes_state import _default_db_path
+        from hermes_state_replay import require_plaintext_fallback_allowed
+
+        require_plaintext_fallback_allowed(_default_db_path(), session_id)
         return _write_payload(_get_flush_dir(), {
             "session_key": session_id, "reason": TRANSCRIPT_CAP_DROP_REASON, "ts": int(time.time()),
             "seq": next(_TRANSCRIPT_SPOOL_SEQ),

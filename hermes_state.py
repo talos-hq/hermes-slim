@@ -437,6 +437,9 @@ def divert_session_transcript_jsonl(session_id: str, messages) -> Optional[Path]
     sid = str(session_id or "").strip()
     if not sid or not messages:
         return None
+    from hermes_state_replay import require_plaintext_fallback_allowed
+
+    require_plaintext_fallback_allowed(_default_db_path(), sid)
     sessions_dir = get_hermes_home() / "sessions"
     make_user_dir(sessions_dir, parents=True, exist_ok=True)
     path = sessions_dir / f"{sid}.jsonl"
