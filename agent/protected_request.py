@@ -3,6 +3,7 @@
 import json
 
 from hermes_state_replay import REPLAY_BINDING_KEY, ProtectedReplayError, _open_sidecar, _project_value, replay_log_path
+from hermes_state_replay import require_replay_binding_if_recorded
 
 # These fields belong to the transport. They do not carry transcript text.
 _TRANSPORT_KEYS = {"model", "extra_headers", "timeout", "stream_options"}
@@ -21,9 +22,10 @@ def session_request_keybox(store, session_id):
         return None
     absent = object()
     binding = lookup(session_id, REPLAY_BINDING_KEY, absent)
-    if binding is absent:
-        return None
     path = getattr(store, "db_path", None)
+    if binding is absent:
+        require_replay_binding_if_recorded(path, session_id)
+        return None
     if path is None:
         raise ProtectedReplayError("Protected provider request has no local transcript store")
     return _open_sidecar(path, session_id, binding, writable=True)

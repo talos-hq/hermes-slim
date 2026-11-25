@@ -203,3 +203,26 @@ def test_initialize_protected_session_commits_binding_and_projects_system_prompt
         db.create_session("existing", "test")
         with pytest.raises(ProtectedReplayError, match="Existing session"):
             db.create_protected_session("existing", "test")
+
+
+@pytest.mark.parametrize("persisted_file", ["sidecar", "binding"])
+def test_lost_binding_cannot_downgrade_reads_writes_or_requests(tmp_path, persisted_file):
+    from agent.protected_request import session_request_keybox
+
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        db.create_session("saved", "test")
+        db.append_message("saved", "user", content="redacted fixture")
+        log = replay_log_path(path, "saved")
+        log.parent.mkdir()
+        if persisted_file == "sidecar":
+            log.with_name(log.name + ".keybox.sqlite").touch()
+        else:
+            log.with_suffix(".binding.json").touch()
+        with pytest.raises(ProtectedReplayError, match="missing its saved replay binding"):
+            db.get_messages_as_conversation("saved")
+        with pytest.raises(ProtectedReplayError, match="missing its saved replay binding"):
+            db.append_message("saved", "user", content="must stay off disk")
+        with pytest.raises(ProtectedReplayError, match="missing its saved replay binding"):
+            session_request_keybox(db, "saved")
+        assert [row["content"] for row in db.get_messages("saved")] == ["redacted fixture"]

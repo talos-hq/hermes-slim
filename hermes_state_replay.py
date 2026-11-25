@@ -22,17 +22,27 @@ def require_plaintext_fallback_allowed(db_path: Path, session_id: str) -> None:
     """Block plaintext diversion when SQLite cannot supply a protected binding."""
     from hermes_cli.config import get_env_value
 
-    if get_env_value(_MASTER_KEY_ENV):
+    if get_env_value(_MASTER_KEY_ENV) or _has_replay_files(db_path, session_id):
         raise ProtectedReplayError("Protected transcript requires a verified fallback")
+
+
+def _has_replay_files(db_path: Path, session_id: str) -> bool:
     log = replay_log_path(db_path, session_id)
-    sidecar = log.with_name(log.name + ".keybox.sqlite")
-    try:
-        sidecar.lstat()
-    except FileNotFoundError:
-        return
-    except OSError:
-        raise ProtectedReplayError("Transcript protection could not be checked") from None
-    raise ProtectedReplayError("Protected transcript requires a verified fallback")
+    for path in (log.with_name(log.name + ".keybox.sqlite"), log.with_suffix(".binding.json")):
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise ProtectedReplayError("Transcript protection could not be checked") from None
+        return True
+    return False
+
+
+def require_replay_binding_if_recorded(db_path, session_id):
+    """Reject an apparently unbound session when there is durable protection evidence."""
+    if db_path is not None and session_id and _has_replay_files(db_path, session_id):
+        raise ProtectedReplayError("Protected transcript is missing its saved replay binding")
 
 
 def _text_fields(messages):
@@ -55,10 +65,13 @@ def validate_replay_history(db, session_id, session_ids, messages):
         verify_protected_replay(db.db_path, session_id, binding, messages)
     elif any(
         ancestor != session_id
-        and db.get_session_model_config_value(ancestor, REPLAY_BINDING_KEY, missing) is not missing
+        and (db.get_session_model_config_value(ancestor, REPLAY_BINDING_KEY, missing) is not missing
+             or _has_replay_files(db.db_path, ancestor))
         for ancestor in session_ids
     ):
         raise ProtectedReplayError("Protected transcript lineage has no replay binding")
+    else:
+        require_replay_binding_if_recorded(db.db_path, session_id)
 
 
 def _master_key():
@@ -109,6 +122,7 @@ def transcript_write_keybox(db_path, conn, session_id):
         keybox = _open_sidecar(db_path, session_id, binding, writable=True)
         remember_fallback_binding(db_path, session_id, binding)
         return keybox
+    require_replay_binding_if_recorded(db_path, session_id)
     return None
 
 
