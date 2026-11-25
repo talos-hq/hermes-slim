@@ -320,6 +320,30 @@ def test_shutdown_drain_does_not_acknowledge_volatile_protected_input(spool_home
     assert "unavailable" in replies[2].lower()
 
 
+def test_protected_internal_wake_requires_durable_admission(monkeypatch):
+    from types import SimpleNamespace
+    from gateway.platforms.event import MessageType
+    from gateway.run_busy import GatewayBusySessionMixin
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    admitted = []
+
+    async def admit(_runner, _adapter, _source, text, _producer, metadata):
+        admitted.append((text, metadata))
+        return text == "accepted"
+
+    monkeypatch.setattr("gateway.session_automation.admit_route_wake", admit)
+    runner = SimpleNamespace(_delivery_adapter_for=lambda _source: object())
+    for text, trusted, accepted in (("accepted", True, True), ("refused", True, False), ("untrusted", False, False)):
+        event = SimpleNamespace(
+            source=None, text=text, message_type=MessageType.TEXT, metadata={"fixture": True},
+            allow_gateway_control=trusted, _gateway_accepted=False,
+        )
+        assert asyncio.run(GatewayBusySessionMixin._handle_protected_busy_wake(runner, event, "route"))
+        assert event._gateway_accepted is accepted
+    assert admitted == [("accepted", {"fixture": True}), ("refused", {"fixture": True})]
+
+
 def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
     pytest.importorskip("convo_safe.replay")
     from agent.secret_scope import reset_multiplex_context, set_multiplex_context
