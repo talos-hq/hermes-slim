@@ -6,6 +6,7 @@ import pytest
 
 import hermes_state_runtime as runtime
 from gateway.session_ingress_media import ingress_fingerprint, reconcile_native_retry
+from gateway.session_results import admission_result
 from hermes_state import SessionDB
 from hermes_state_replay import ProtectedReplayError
 
@@ -37,11 +38,21 @@ def test_protected_ledger_projects_text_and_keeps_retry_identity(tmp_path, monke
             runtime.admit_session_input(db, **identity, payload=first["payload"], intent="steer")
         with pytest.raises(runtime.RuntimeStoreError, match="admission_conflict"):
             runtime.admit_session_input(db, **identity, payload={"text": "changed"})
+        claimed = runtime.claim_session_input(db, epoch=epoch, session_id="fixture")
+        error = "provider-fixture@example.org"
+        runtime.settle_session_input(
+            db, epoch=epoch, admission_id=claimed["admission_id"], generation=claimed["generation"],
+            outcome="failed", result={"result": {"error": error}},
+        )
+        stored = admission_result(db, claimed["admission_id"])
+        assert "[[CONVO_SAFE:" in stored["result"]["error"]
+        assert error not in json.dumps(stored)
 
     with SessionDB(db_path=db_path) as db:
         saved = runtime.get_session_admission(db, admission_id=first["admission_id"])
         assert saved["payload"] == first["payload"]
     assert email.encode() not in db_path.read_bytes()
+    assert error.encode() not in db_path.read_bytes()
 
 
 def test_protected_rehome_requires_a_destination_with_the_queued_mappings(tmp_path, monkeypatch):

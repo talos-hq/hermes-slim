@@ -262,6 +262,24 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
     return db._execute_write(write)
 
 
+def _encode_admission_result(db, conn, row, result):
+    from hermes_state_local_lineage import local_physical_target
+    from hermes_state_replay import ProtectedReplayError, _project_value, transcript_write_keybox
+    from hermes_state_terminal import compact_result, encode_result
+
+    payload = json.loads(row['payload_json'])
+    compact = compact_result(result, user_message=payload.get('text'))
+    owner = row['target_session_id']
+    physical = local_physical_target(conn, owner)
+    target = db._compression_tip_on(conn, physical)
+    keybox = transcript_write_keybox(db.db_path, conn, target)
+    if keybox is None and any(
+        transcript_write_keybox(db.db_path, conn, ancestor) is not None for ancestor in {owner, physical} - {target}
+    ):
+        raise ProtectedReplayError("Protected admission result has no bound destination")
+    return _json(encode_result(compact if keybox is None else _project_value(keybox, compact)))
+
+
 def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, outcome: str,
                          result: dict | None = None, _transfers=None, _terminal_write=None) -> dict:
     """``_terminal_write(conn, row)`` is the owner's same-transaction effect (a transcript notice,
@@ -269,7 +287,6 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
     not commit, may run again on SQLite retry, and raising rolls the settlement back."""
     if outcome not in ('completed', 'interrupted', 'rejected', 'failed'):
         raise RuntimeStoreError('invalid_params')
-    from hermes_state_terminal import compact_result, encode_result
     def write(conn):
         _epoch(conn, epoch)
         row = _admission(conn, admission_id)
@@ -283,7 +300,7 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
             _terminal_write(conn, row)
         if result is not None:
             from hermes_state_terminal import RESULT_PREFIX
-            encoded = _json(encode_result(compact_result(result, user_message=json.loads(row['payload_json']).get('text'))))
+            encoded = _encode_admission_result(db, conn, row, result)
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) '
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (RESULT_PREFIX + admission_id, encoded))
@@ -714,11 +731,9 @@ def resolve_unknown_session_input(db, *, epoch: int, admission_id: str, generati
             outcome, stored = _captured
             if outcome not in ('completed', 'interrupted', 'failed'):
                 raise RuntimeStoreError('invalid_params')
-            from hermes_state_terminal import compact_result, encode_result
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) '
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                         (RESULT_PREFIX + admission_id, _json(encode_result(compact_result(
-                             stored, user_message=json.loads(row['payload_json']).get('text'))))))
+                         (RESULT_PREFIX + admission_id, _encode_admission_result(db, conn, row, stored)))
         if _terminal_write is not None:
             _terminal_write(conn, row)
         _retire_admission_workers(conn, row, row['owner_epoch'])
