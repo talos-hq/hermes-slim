@@ -413,9 +413,9 @@ class SessionTranscriptMixin:
             return None
         failures: list[Exception] = []
 
-        def replay(message: dict[str, Any]) -> None:
+        def replay(message: dict[str, Any], receipt: str) -> None:
             try:
-                self._append_transcript_message(session_id, message)
+                self._append_transcript_message(session_id, message, spool_receipt=receipt)
             except Exception as exc:
                 failures.append(exc)
                 raise
@@ -427,7 +427,7 @@ class SessionTranscriptMixin:
             with self._transcript_retry_lock:
                 known_failing = bool(self._transcript_append_failures.get(session_id))
             _replayed, remaining = drain_transcript_spool(
-                session_id, replay, db_known_failing=known_failing)
+                session_id, replay, db_known_failing=known_failing, with_receipt=True)
             if not remaining:
                 with self._transcript_retry_lock:
                     spooled_sessions.discard(session_id)
@@ -446,7 +446,7 @@ class SessionTranscriptMixin:
         with self._transcript_retry_lock:
             self._lazy("_spooled_drop_sessions", set).update(session_ids)
 
-    def _append_transcript_message(self, session_id: str, message: dict[str, Any]) -> None:
+    def _append_transcript_message(self, session_id: str, message: dict[str, Any], *, spool_receipt=None) -> None:
         """Write one transcript row. Caller handles retry queuing."""
         _db = self._db_for_session_id(session_id)
         if _db is None:
@@ -454,7 +454,10 @@ class SessionTranscriptMixin:
             # into the ambient store.
             raise RuntimeError(
                 f"no owning session store for {session_id}; deferring transcript write")
-        _db.append_message(**transcript_append_kwargs(session_id, message))
+        kwargs = transcript_append_kwargs(session_id, message)
+        if spool_receipt is not None:
+            kwargs["spool_receipt"] = spool_receipt
+        _db.append_message(**kwargs)
 
     @staticmethod
     def _is_fts_corruption_error(exc: Exception) -> bool:

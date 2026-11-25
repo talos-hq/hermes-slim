@@ -237,7 +237,8 @@ def spool_dropped_transcript_message(session_id: str, message: dict[str, Any]) -
         return None
 
 
-def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = False) -> tuple[int, int]:
+def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = False,
+                           with_receipt: bool = False) -> tuple[int, int]:
     """Replay cap-dropped transcript messages spooled for *session_id*; return ``(replayed,
     remaining)``. ``replay(message_dict)`` runs per message in drop order; a spool file is deleted
     only after its replay succeeds. The first failure stops the drain (the DB is likely still
@@ -275,7 +276,10 @@ def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = 
     ordered, replayed, remaining = sorted(entries, key=lambda e: e[0]), 0, 0
     for idx, (_key, path, message) in enumerate(ordered):
         try:
-            replay(message)
+            if with_receipt:
+                replay(message, _transcript_spool_receipt(path))
+            else:
+                replay(message)
         except Exception as exc:
             if is_row_rejection(exc):  # no retry can write it, so it must not hold the session back
                 _quarantine_spool_file(path, session_id, exc)
@@ -291,6 +295,10 @@ def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = 
         logger.info("Replayed %d spooled transcript message(s) for %s after DB recovery", replayed,
                     session_id)
     return replayed, remaining
+
+
+def _transcript_spool_receipt(path: Path) -> str:
+    return "gateway.transcript_spool.v1." + path.stem
 
 
 def _json_safe(value: Any) -> bool:
@@ -552,7 +560,9 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
             blocked_sessions[spooled_sid] += 1
             return False
         try:
-            session_db.append_message(**transcript_append_kwargs(spooled_sid, message, fallback_ts=payload.get("ts")))
+            session_db.append_message(
+                **transcript_append_kwargs(spooled_sid, message, fallback_ts=payload.get("ts")),
+                spool_receipt=_transcript_spool_receipt(path))
         except Exception as exc:
             if is_row_rejection(exc):  # no retry can write it, so it must not hold the session back
                 _quarantine_spool_file(path, spooled_sid, exc)

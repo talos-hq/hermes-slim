@@ -251,6 +251,38 @@ def test_failed_diversion_keeps_only_unwritten_records(monkeypatch):
     assert store._dirty_transcripts["queue"] == [unsaved, concurrent]
 
 
+def test_transcript_spool_retry_after_interrupted_cleanup(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from gateway import shutdown_flush
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    db_path = spool_home / "state.db"
+    monkeypatch.setattr("hermes_state._default_db_path", lambda: db_path)
+    address = "retry-spool@example.org"
+    with SessionDB(db_path=db_path) as db:
+        db.create_protected_session("fixture", "test")
+        path = shutdown_flush.spool_dropped_transcript_message("fixture", {"role": "user", "content": address})
+        assert path is not None
+        with monkeypatch.context() as interrupt:
+            def stop_after_commit(*_args):
+                raise KeyboardInterrupt
+
+            interrupt.setattr(shutdown_flush, "_remove_replayed", stop_after_commit)
+            with pytest.raises(KeyboardInterrupt):
+                shutdown_flush.recover_pending_spool(db)
+        assert path.exists()
+    with SessionDB(db_path=db_path) as db:
+        store = _make_store(db)
+        store.mark_spooled_drop_sessions({"fixture"})
+        assert store._drain_spooled_drops("fixture") is None
+        rows = db.get_messages_as_conversation("fixture")
+        assert len(rows) == 1
+        assert "[[CONVO_SAFE:" in rows[0]["content"]
+        assert not path.exists()
+    assert address.encode() not in db_path.read_bytes()
+
+
 def test_shutdown_pending_and_overflow_bind_redacted_text_to_original_session(spool_home, monkeypatch):
     pytest.importorskip("convo_safe.replay")
     from agent.protected_request import session_request_keybox

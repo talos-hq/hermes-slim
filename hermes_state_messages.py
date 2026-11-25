@@ -403,7 +403,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         api_content: Optional[str] = None, display_kind: Optional[str] = None,
         display_metadata: Optional[dict[str, Any]] = None, compression_lock_holder: Optional[str] = None,
         turn_lease_holder: Optional[str] = None, turn_lease_ttl_seconds: float = 300.0,
-        message_uid: Optional[str] = None) -> int:
+        message_uid: Optional[str] = None, spool_receipt: Optional[str] = None) -> int:
         """Append one message; returns the row id and bumps the session counters. ``platform_message_id``:
         the platform's own id. ``api_content``: byte-fidelity sidecar, the exact string sent to the API when
         it differed from ``content``, stored as sent except lone surrogates. ``message_uid``: the id a caller
@@ -416,6 +416,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         stamp_message_uid(msg)  # a fresh occurrence: mint its durable id
         self._stamp_tool_call_uids(msg, tool_calls, {})
         def _do(conn):
+            if spool_receipt and (prior := conn.execute("SELECT value FROM state_meta WHERE key=?", (spool_receipt,)).fetchone()):
+                return int(prior[0])
             self._check_transcript_write_guards(conn, session_id, compression_lock_holder,
                 turn_lease_holder=turn_lease_holder, turn_lease_ttl_seconds=turn_lease_ttl_seconds)
             box = transcript_write_keybox(self.db_path, conn, session_id)
@@ -424,6 +426,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
                 session_id, role, safe_msg, safe_calls, message_timestamp, keep_reasoning=True)
             msg_id = conn.execute(_INSERT_MESSAGE_SQL, params).lastrowid
             self._bump_session_counters(conn, session_id, 1, _tool_calls_count(tool_calls), unit=True)
+            if spool_receipt:
+                conn.execute("INSERT INTO state_meta(key,value) VALUES (?,?)", (spool_receipt, str(msg_id)))
             return msg_id
         # THE critical write (failure aborts the turn): long patience so a sibling legitimately
         # holding the lock for seconds (VACUUM, checkpoint) can't kill it.
