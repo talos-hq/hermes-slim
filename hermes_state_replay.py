@@ -103,7 +103,12 @@ def transcript_write_keybox(db_path, conn, session_id):
     row = conn.execute("SELECT model_config FROM sessions WHERE id = ?", (session_id,)).fetchone()
     config = _parse_model_config(row[0]) if row is not None else {}
     if REPLAY_BINDING_KEY in config:
-        return _open_sidecar(db_path, session_id, config[REPLAY_BINDING_KEY], writable=True)
+        from hermes_state_replay_fallback import remember_fallback_binding
+
+        binding = config[REPLAY_BINDING_KEY]
+        keybox = _open_sidecar(db_path, session_id, binding, writable=True)
+        remember_fallback_binding(db_path, session_id, binding)
+        return keybox
     return None
 
 

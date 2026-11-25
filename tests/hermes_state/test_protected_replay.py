@@ -80,6 +80,7 @@ def test_protected_sqlite_writes_project_and_keep_tool_pairing(tmp_path, monkeyp
             return value.replace("fixture@example.org", "[email-marker]")
 
     monkeypatch.setattr(hermes_state_replay, "_open_sidecar", lambda *args, **kwargs: Projector())
+    monkeypatch.setattr("hermes_state_replay_fallback.remember_fallback_binding", lambda *_: None)
     with SessionDB(db_path=tmp_path / "state.db") as db:
         db.create_session("saved", "test")
         db.patch_session_model_config("saved", {"replay_binding": {"scope": 1}})
@@ -127,3 +128,49 @@ def test_protected_transcript_fallbacks_do_not_write_plaintext(tmp_path, monkeyp
     assert spool_dropped_transcript_message("saved", record) is None
     assert not (tmp_path / "sessions").exists()
     assert not (tmp_path / "pending_messages").exists()
+
+
+def test_signed_binding_keeps_fallbacks_redacted_without_sqlite(tmp_path, monkeypatch):
+    import json
+
+    from gateway.shutdown_flush import spool_dropped_transcript_message
+    from hermes_state import divert_session_transcript_jsonl
+    from hermes_state_replay_fallback import remember_fallback_binding
+
+    class Projector:
+        replay_session = 1
+
+        def redact_model_text(self, _scope, value, *, redact_email):
+            assert redact_email
+            return value.replace("fixture@example.org", "[email-marker]")
+
+    path = tmp_path / "state.db"
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_state.DEFAULT_DB_PATH", path)
+    monkeypatch.setattr("hermes_state_replay_fallback._master_key", lambda: bytes(32))
+    binding = {"scope": 1, "lineage": "fixture-lineage", "sidecar": "fixture-sidecar"}
+
+    def open_bound(db_path, session_id, expected, *, writable):
+        assert (db_path, session_id, expected, writable) == (path, "saved", binding, True)
+        return Projector()
+
+    monkeypatch.setattr("hermes_state_replay_fallback._open_sidecar", open_bound)
+    log = replay_log_path(path, "saved")
+    log.parent.mkdir()
+    remember_fallback_binding(path, "saved", binding)
+
+    record = {"role": "user", "content": "Message fixture@example.org"}
+    assert divert_session_transcript_jsonl("saved", [record]) == log
+    assert json.loads(log.read_text())["content"] == "Message [email-marker]"
+    spool = spool_dropped_transcript_message("saved", record)
+    assert json.loads(spool.read_text())["data"]["message"]["content"] == "Message [email-marker]"
+    assert not path.exists()
+    assert record["content"] == "Message fixture@example.org"
+
+    manifest = log.with_suffix(".binding.json")
+    envelope = json.loads(manifest.read_text())
+    envelope["binding"]["sidecar"] = "wrong"
+    manifest.write_text(json.dumps(envelope))
+    with pytest.raises(ProtectedReplayError, match="could not be verified"):
+        divert_session_transcript_jsonl("saved", [record])
+    assert len(log.read_text().splitlines()) == 1
