@@ -114,6 +114,7 @@ def test_protected_transcript_fallbacks_do_not_write_plaintext(tmp_path, monkeyp
     from hermes_state import divert_session_transcript_jsonl
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_state.DEFAULT_DB_PATH", tmp_path / "state.db")
     monkeypatch.setattr("hermes_cli.config.get_env_value", lambda _name: "fixture" if key_configured else None)
     if not key_configured:
         log = replay_log_path(tmp_path / "state.db", "saved")
