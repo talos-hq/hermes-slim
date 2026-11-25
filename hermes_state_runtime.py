@@ -127,6 +127,15 @@ def begin_runtime_epoch(db, *, instance_id: str) -> int:
 ADMISSION_QUEUE_MAX = 32
 
 
+def _admission_replay_target(session_id, principal_id, payload):
+    descriptor = payload.get('local_automation_v1') if isinstance(payload, dict) else None
+    if principal_id.startswith('automation:') and isinstance(descriptor, dict) and descriptor.get('owner') == session_id:
+        target = descriptor.get('target')
+        if isinstance(target, str) and target:
+            return target
+    return session_id
+
+
 def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
                         request_id: str, payload: dict, intent: str = 'queue',
                         _authorize_write=None, _replay_guard=None) -> dict:
@@ -161,7 +170,8 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
                 # Native delivery reconciliation can return the already projected
                 # receipt for an exact retry. Authenticate the binding before
                 # accepting that representation in place of the original input.
-                keybox = transcript_write_keybox(db.db_path, conn, session_id) if intent == old['intent'] else None
+                target = _admission_replay_target(session_id, principal_id, json.loads(old['payload_json']))
+                keybox = transcript_write_keybox(db.db_path, conn, target) if intent == old['intent'] else None
                 from hermes_state_replay import _project_value
                 if keybox is None or _json(_project_value(keybox, canonical_payload)) != old['payload_json']:
                     raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
@@ -176,7 +186,8 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
             raise RuntimeStoreError('queue_full')
         if _authorize_write is not None:
             _authorize_write(conn)
-        encoded = _json(project_session_prompt(db, conn, session_id, canonical_payload))
+        target = _admission_replay_target(session_id, principal_id, canonical_payload)
+        encoded = _json(project_session_prompt(db, conn, target, canonical_payload))
         admission_id = uuid.uuid4().hex
         conn.execute('''INSERT INTO session_admissions(admission_id,request_id,principal_id,
             target_session_id,lineage_json,payload_json,payload_digest,intent,status,owner_epoch)
@@ -443,6 +454,7 @@ def retarget_local_automation(db, *, epoch: int, session_id: str, principal_id: 
     for value in (session_id, principal_id, new_target, *old_targets):
         _text(value)
     old_targets = set(old_targets)
+    from hermes_state_replay import ProtectedReplayError, _project_value, transcript_write_keybox
 
     def write(conn):
         _epoch(conn, epoch)
@@ -457,7 +469,12 @@ def retarget_local_automation(db, *, epoch: int, session_id: str, principal_id: 
             descriptor = payload.get('local_automation_v1') if isinstance(payload, dict) else None
             if not isinstance(descriptor, dict) or descriptor.get('target') not in old_targets:
                 continue
+            target_keybox = transcript_write_keybox(db.db_path, conn, new_target)
+            if target_keybox is None and transcript_write_keybox(db.db_path, conn, descriptor['target']) is not None:
+                raise ProtectedReplayError("Queued protected automation requires a protected destination")
             descriptor['target'] = new_target
+            if target_keybox is not None:
+                payload = _project_value(target_keybox, payload)
             digest = admission_fingerprint(canonical_target=session_id, payload={'input': payload, 'intent': row['intent']})
             conn.execute("UPDATE session_admissions SET payload_json=?,payload_digest=? WHERE admission_id=? AND status='queued'",
                          (_json(payload), digest, row['admission_id']))

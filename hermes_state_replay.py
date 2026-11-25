@@ -90,6 +90,21 @@ def open_unbound_sidecar(path):
     return Keybox.open_replay(path, _master_key())
 
 
+def fork_replay_config(db_path, keybox, child_id, model_config):
+    """Prepare a distinct authenticated child binding before its row is published."""
+    if keybox is None:
+        return model_config
+    from convo_safe.replay import replay_binding
+
+    child_log = replay_log_path(db_path, child_id)
+    try:
+        keybox.fork_replay(child_log)
+        child = open_unbound_sidecar(child_log)
+        return {**(model_config or {}), REPLAY_BINDING_KEY: replay_binding(child)}
+    except (OSError, ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected replay child could not be prepared") from None
+
+
 def _open_sidecar(db_path, session_id, binding, *, writable=False):
     try:
         from convo_safe.replay import open_bound_replay

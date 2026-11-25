@@ -165,7 +165,12 @@ def adopt_untracked_compression(db, *, epoch, session_id, expected):
 
 
 def reset_local_target(db, *, epoch, parent_session_id, entry):
+    from hermes_state_replay import fork_replay_config, transcript_write_keybox
+
+    model_config = None
+
     def write(conn):
+        nonlocal model_config
         _epoch(conn, epoch)
         parent = conn.execute('SELECT * FROM sessions WHERE id=?', (parent_session_id,)).fetchone()
         if parent is None or parent['end_reason'] == 'compression':
@@ -181,9 +186,12 @@ def reset_local_target(db, *, epoch, parent_session_id, entry):
         from hermes_state_mutation_guards import require_not_executing
         require_not_executing(conn, list({logical_id, parent_session_id}))
         policy = receipt['policy']
+        if model_config is None:
+            keybox = transcript_write_keybox(db.db_path, conn, parent_session_id)
+            model_config = fork_replay_config(db.db_path, keybox, entry['session_id'], {'_reset_from': parent_session_id})
         db._publish_child_session_row(conn, parent, parent_session_id=parent_session_id,
             child_session_id=entry['session_id'], source=policy['source'], model=policy['model'],
-            model_config={'_reset_from': parent_session_id}, system_prompt=None,
+            model_config=model_config, system_prompt=None,
             cwd=policy['cwd'], profile_name=parent['profile_name'])
         conn.execute("UPDATE sessions SET ended_at=?,end_reason='session_reset' WHERE id=?",
                      (time.time(), parent_session_id))
