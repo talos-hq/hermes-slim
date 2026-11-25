@@ -202,7 +202,7 @@ def test_trajectory_projects_input_and_rendered_export(monkeypatch):
 
 def test_request_dump_projects_provider_error_on_disk_and_stdout(monkeypatch, tmp_path, capsys):
     from agent import protected_request
-    from agent.agent_runtime_helpers import dump_api_request_debug
+    from agent.agent_runtime_helpers_request_dump import dump_api_request_debug
 
     monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: Projector())
     monkeypatch.setenv("HERMES_DUMP_REQUEST_STDOUT", "1")
