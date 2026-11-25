@@ -330,10 +330,20 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
             changed = json.loads(original)
             changed["data"]["sealed_v1"] = "AAAA"
             first.write_text(json.dumps(changed))
-            assert recover_pending_spool(db, session_resolver=resolver)[0] == 1
-            assert len(_spool_files(spool_home)) == 2
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            assert len(_spool_files(spool_home)) == 3
+            changed = json.loads(original)
+            changed["seq"] = 999
+            first.write_text(json.dumps(changed))
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            changed = json.loads(original)
+            changed["session_key"] = "untrusted-route"
+            first.write_text(json.dumps(changed))
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            first.write_text("invalid JSON")
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
             first.write_bytes(original)
-            assert recover_pending_spool(db, session_resolver=resolver)[0] == 2
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 3
             with _profile_runtime_scope(named):
                 from agent.protected_request import session_request_keybox
 

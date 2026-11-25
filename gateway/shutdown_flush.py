@@ -56,7 +56,8 @@ def _get_flush_dir():
 def _write_payload(flush_dir: Path, payload: dict[str, Any]) -> Path:
     """Atomically write one private, uniquely named recovery payload; return its path."""
     from utils import atomic_json_write
-    final_path = flush_dir / f"pending-{uuid.uuid4().hex}.json"
+    prefix = "pending-sealed" if "sealed_v1" in (payload.get("data") or {}) else "pending"
+    final_path = flush_dir / f"{prefix}-{uuid.uuid4().hex}.json"
     atomic_json_write(final_path, payload, mode=0o600, default=str)
     if os.name == "posix":
         # Persist the directory entry too; keep the published file (the only recovery copy) even if
@@ -383,7 +384,7 @@ def _quarantine_spool_file(path: Path, session_id: str, exc: BaseException) -> N
                    session_id, exc, target)
 
 
-def _order_flush_files(paths) -> list[Path]:
+def _order_flush_files(paths, verified=None) -> list[Path]:
     """Order recovery payloads by :func:`_spool_sort_key`, as :func:`drain_transcript_spool` does.
     ``SessionDB`` restores a conversation by AUTOINCREMENT id and spool files have random names, so
     any other order permanently scrambles the recovered transcript.
@@ -394,7 +395,8 @@ def _order_flush_files(paths) -> list[Path]:
     entries = []
     for path in paths:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            payload = verified[path] if verified is not None and path in verified else json.loads(
+                path.read_text(encoding="utf-8-sig"))
         # OSError: unreadable; ValueError: bad JSON or bytes; RecursionError: nesting too deep.
         except (OSError, ValueError, RecursionError):
             payload = None
@@ -404,6 +406,36 @@ def _order_flush_files(paths) -> list[Path]:
             entries.append(((1, 0.0, 0.0, path.name), path))
     entries.sort(key=lambda entry: entry[0])
     return [path for _key, path in entries]
+
+
+def _authenticate_sealed_batch(paths, session_resolver):
+    """Verify sealed metadata before it can influence the order of appends."""
+    from gateway.shutdown_sealed_spool import unseal_pending
+
+    verified = {}
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, RecursionError):
+            if path.name.startswith("pending-sealed-"):
+                return None
+            continue
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or "sealed_v1" not in data:
+            if path.name.startswith("pending-sealed-"):
+                return None
+            continue
+        try:
+            resolved = session_resolver(payload["session_key"], not_after=payload.get("ts")) if session_resolver else None
+            if not resolved or resolved[1] is None:
+                return None
+            with _pending_profile_scope(resolved[1].db_path.parent):
+                unseal_pending(data, payload)
+        except Exception:  # health: allow BLE001 -- unavailable profile, key or ciphertext must hold the queue
+            logger.warning("Sealed pending queue could not be verified; preserving queued files")
+            return None
+        verified[path] = payload
+    return verified
 
 
 def recover_pending_to_db(session_db=None, *, session_resolver=None) -> int:
@@ -424,7 +456,9 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
     messages recovered, and the session ids whose spool files this pass held back after a failed
     replay, so the live writer can drain them before that session's next row.
     """
-    flush_files = _order_flush_files(_get_flush_dir().glob("*.json"))
+    paths = [path for path in _get_flush_dir().glob("*.json") if path not in _REPLAYED_UNREMOVABLE]
+    verified = _authenticate_sealed_batch(paths, session_resolver)
+    flush_files = _order_flush_files(paths, verified)
     if not flush_files:
         return 0, set()
     own_db = session_db is None
@@ -444,16 +478,21 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
             # never unlinked, so aborting the pass would re-poison every later boot.
             protected_route = None
             try:
-                payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                payload = verified[path] if verified is not None and path in verified else json.loads(
+                    path.read_text(encoding="utf-8-sig"))
                 # Agent-history snapshots use a different schema (reason +
                 # messages list) and are meant for manual operator recovery,
                 # not automatic DB insertion. Skip them silently.
                 if payload.get("reason") == AGENT_HISTORY_REASON:
                     continue
+                if verified is None and payload.get("reason") != TRANSCRIPT_CAP_DROP_REASON:
+                    continue
                 route = payload.get("session_key")
                 if isinstance(route, str) and route in blocked_routes:
                     continue
                 data = payload.get("data")
+                if isinstance(data, dict) and "sealed_v1" in data and (verified is None or path not in verified):
+                    continue
                 if isinstance(route, str) and isinstance(data, dict) and (
                     payload.get("replay_session") or "sealed_v1" in data
                 ):
