@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from agent.message_sanitization import sanitize_outbound_kwargs, strip_images_for_rejecting_model
+from agent.protected_request import project_observer_history, project_request, request_keybox
 from hermes_cli.observability.shared_metrics_efficiency import observe_request_tools
 from utils import env_var_enabled
 
@@ -31,6 +32,7 @@ class ApiRequestBuild:
     api_kwargs: Any
     _original_api_kwargs: Any
     _llm_middleware_trace: Any
+    _protected_keybox: Any = None
 
 
 def _set_extra_header(api_kwargs: Any, key: str, value: str) -> None:
@@ -152,6 +154,12 @@ def build_request_payload(
     if agent._empty_content_retries > 0 and agent._is_openrouter_url():
         _set_extra_header(api_kwargs, "X-OpenRouter-Cache", "false")
     _apply_user_turn_request_headers(agent, api_kwargs)
+    keybox = request_keybox(agent)
+    if keybox is not None and _moa_prepared_request is not None:
+        from hermes_state_replay import ProtectedReplayError
+
+        raise ProtectedReplayError("Protected provider request contains a private prepared payload")
+    api_kwargs = project_request(keybox, api_kwargs)
     try:
         from hermes_cli.middleware import apply_llm_request_middleware
 
@@ -168,9 +176,12 @@ def build_request_payload(
         logger.warning("LLM request middleware failed; sending the request unmodified", exc_info=True)
         _original_api_kwargs = dict(api_kwargs)
         _llm_middleware_trace = []
+    api_kwargs = project_request(keybox, api_kwargs)
+    if keybox is not None:
+        _original_api_kwargs = project_request(keybox, _original_api_kwargs)
     return ApiRequestBuild(
         "fallthrough", api_messages, _moa_prepared_request, tools_for_api, api_kwargs,
-        _original_api_kwargs, _llm_middleware_trace,
+        _original_api_kwargs, _llm_middleware_trace, keybox,
     )
 
 
@@ -190,6 +201,8 @@ def build_api_request(
         api_request_id=api_request_id, effective_task_id=effective_task_id, turn_id=turn_id,
     )
     api_kwargs, api_messages, _moa_prepared_request = built.api_kwargs, built.api_messages, built._moa_prepared_request
+    messages, original_user_message = project_observer_history(built._protected_keybox, messages, original_user_message)
+    api_messages, _ = project_observer_history(built._protected_keybox, api_messages, None)
     _fire_pre_api_request_hook(
         agent, api_kwargs, api_messages, built._llm_middleware_trace, messages=messages,
         original_user_message=original_user_message, approx_tokens=approx_tokens,
