@@ -750,13 +750,14 @@ def _dispatch_authorized_once(
         agent._iters_since_skill = 0
 
     from agent.terminal_approval_batch import prepare_current_terminal
+    from agent.protected_request import project_tool_result
     prepare_current_terminal(ref)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
     from agent.tool_progress_relay import bound_tool_progress
     from tools.connectors.data_use import collect_data_use
     with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
         try:
-            return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
+            return _run_with_activity_heartbeat(agent, ref.name, lambda: project_tool_result(agent, execute(ref.args)))
         finally:
             state.data_use = frozenset(data_use)
 
@@ -1097,8 +1098,10 @@ def _commit_tool_result(
     pre-persist content for UI previews) or ``None`` when the flush failed (stop the batch).
     """
     function_name, function_args, tool_call_id, effective_task_id = ref.name, ref.args, ref.call_id, ref.task_id
+    from agent.protected_request import project_tool_result
     from hermes_cli.observability.shared_metrics_harness import observe_tool_outcome
 
+    function_result = project_tool_result(agent, function_result)
     observe_tool_outcome(agent, function_name, is_error)
     if not (blocked or is_error):
         function_result = observe_onboarding_result(agent, function_name, function_args, function_result)
@@ -1107,6 +1110,7 @@ def _commit_tool_result(
             function_result = agent._append_guardrail_observation(
                 function_name, function_args, function_result, failed=is_error, tool_call_id=tool_call_id,
             )
+        function_result = project_tool_result(agent, function_result)
         if is_error:
             logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, error_preview(function_result))
         elif success_log_chars is not None:

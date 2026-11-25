@@ -91,6 +91,27 @@ def project_complete_response(keybox, assistant_message):
         raise ProtectedReplayError("Protected provider response could not be projected") from None
 
 
+def project_tool_result(agent, result):
+    """Project the result before tool middleware or transcript sinks receive it."""
+    keybox = request_keybox(agent)
+    if keybox is None:
+        return result
+    if not isinstance(result, (str, dict, list, tuple, int, float, type(None))):
+        raise ProtectedReplayError("Protected tool result uses an unsupported format")
+    try:
+        if isinstance(result, str) and result.lstrip().startswith(("{", "[")):
+            try:
+                decoded = json.loads(result)
+            except ValueError:
+                decoded = None
+            if decoded is not None:
+                safe = _project(keybox, decoded)
+                return result if safe == decoded else json.dumps(safe, ensure_ascii=False)
+        return _project(keybox, result)
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected tool result could not be projected") from None
+
+
 def project_compression_input(compressor, history):
     """Project structured records before the compressor serializes them."""
     keybox = session_request_keybox(compressor._session_db, compressor._session_id)

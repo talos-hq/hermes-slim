@@ -150,3 +150,17 @@ def test_complete_response_projects_full_text_and_refuses_unrestorable_tool_call
     ))]
     with pytest.raises(ProtectedReplayError):
         project_complete_response(Projector(), message)
+
+
+def test_tool_result_projects_escaped_json_before_observation(monkeypatch):
+    from agent import protected_request
+
+    monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: Projector())
+    raw = r'{"output":"fixture\u0040example.org","count":2}'
+    result = protected_request.project_tool_result(None, raw)
+    assert "[email-marker]" in result
+    assert "fixture" not in result
+    assert protected_request.project_tool_result(None, result) == result
+    assert protected_request.project_tool_result(None, '{"output":"ordinary","count":2}') == (
+        '{"output":"ordinary","count":2}'
+    )
