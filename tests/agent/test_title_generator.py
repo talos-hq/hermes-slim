@@ -898,3 +898,19 @@ class TestModelSwitchMarkerNotTitleable:
         assert apply_instant_title(db, "sess-1", "南京市秦淮区 小时级天气预报") == (
             "南京市秦淮区 小时级天气预报"
         )
+
+
+def test_protected_session_skips_titles_derived_from_user_text(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent import title_generator
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("a protected title reached text derivation or its provider")
+
+    monkeypatch.setattr(title_generator, "derive_title", forbidden)
+    monkeypatch.setattr(title_generator, "generate_title", forbidden)
+    db = SimpleNamespace(get_session_model_config_value=lambda *_: {"scope": 1})
+    assert title_generator.apply_instant_title(db, "protected", "fixture@example.org") is None
+    assert title_generator.maybe_auto_title(db, "protected", "fixture@example.org") is None
+    assert title_generator.auto_title_session(db, "protected", "fixture@example.org") is None

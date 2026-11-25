@@ -606,11 +606,32 @@ def _persist_session_title(session_db, session_id, title, *, source, dedupe=True
         return _set(deduped)
 
 
+def _protected_title_session(session_db, session_id: str) -> bool:
+    from pathlib import Path
+    from hermes_state_replay import REPLAY_BINDING_KEY, ProtectedReplayError, require_replay_binding_if_recorded
+
+    lookup = getattr(session_db, "get_session_model_config_value", None)
+    if not callable(lookup):
+        return False
+    missing = object()
+    if lookup(session_id, REPLAY_BINDING_KEY, missing) is not missing:
+        return True
+    path = getattr(session_db, "db_path", None)
+    try:
+        if isinstance(path, Path):
+            require_replay_binding_if_recorded(path, session_id)
+    except ProtectedReplayError:
+        return True
+    return False
+
+
 def apply_subagent_title(session_db, session_id: str, goal: str) -> Optional[str]:
     """Title a delegate run ``Subagent: <goal's first line>`` at ``derived`` authority. No model call:
     runs fan out in bulk, and the prefix alone is what tells them apart from conversations wherever
     ``sessions.show_subagents`` lists them (#97202). Collisions get ``#N``. Never raises."""
     try:
+        if _protected_title_session(session_db, session_id):
+            return None
         derived = derive_title(goal) if is_titleable_user_message(goal) else None
         return _persist_session_title(session_db, session_id, f"Subagent: {derived}", source="derived") if derived else None
     except Exception:
@@ -629,6 +650,8 @@ def apply_instant_title(
     if not session_db or not session_id:
         return None
     try:
+        if _protected_title_session(session_db, session_id):
+            return None
         title = derive_title(user_message, title_preview) if is_titleable_user_message(user_message) else None
         persisted = _persist_session_title(session_db, session_id, title, source="derived", dedupe=False) if title else None
         if persisted:
@@ -654,7 +677,8 @@ def auto_title_session(
     exception escape (the threading excepthook would spray a traceback into the terminal); the canonical
     trigger is the post-``hermes update`` window where lazy imports read NEW source against OLD modules."""
     try:
-        if not session_db or not session_id or _has_upgraded_title(session_db, session_id):
+        if (not session_db or not session_id or _protected_title_session(session_db, session_id)
+                or _has_upgraded_title(session_db, session_id)):
             return
         # This thread starts AFTER the turn's ambient context was reset; republish it so the call carries
         # the same Portal ``conversation=`` tag (root-of-lineage) and bills usage to this session.
@@ -748,7 +772,7 @@ def maybe_auto_title(
 
     Returns the upgrade thread: already started, or — when ``title_upgrade_must_wait_for_turn`` — left
     UNSTARTED for the caller to hand to ``start_title_upgrade`` once the turn's model request settled."""
-    if not session_db or not session_id or not user_message:
+    if not session_db or not session_id or not user_message or _protected_title_session(session_db, session_id):
         return None
     # History may be pre- or post-message. Past the opening turn, skip once the session holds an
     # ``llm``/``user`` name: count alone left a machinery-opened session nameless, and a ``derived``
