@@ -150,13 +150,20 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
         return retired
     digest = admission_fingerprint(canonical_target=session_id, payload={'input': canonical_payload, 'intent': intent})
     def write(conn):
+        from hermes_state_replay import project_session_prompt, transcript_write_keybox
+
         _epoch(conn, epoch)
         _session(conn, session_id)
         old = conn.execute('''SELECT * FROM session_admissions
             WHERE principal_id=? AND target_session_id=? AND request_id=?''', (principal_id, session_id, request_id)).fetchone()
         if old is not None:
             if old['payload_digest'] != digest:
-                raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
+                # Native delivery reconciliation can return the already projected
+                # receipt for an exact retry. Authenticate the binding before
+                # accepting that representation in place of the original input.
+                if (intent != old['intent'] or _json(canonical_payload) != old['payload_json']
+                        or transcript_write_keybox(db.db_path, conn, session_id) is None):
+                    raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
             if _replay_guard is not None:
                 _replay_guard(conn)
             return _row(old)
@@ -168,7 +175,6 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
             raise RuntimeStoreError('queue_full')
         if _authorize_write is not None:
             _authorize_write(conn)
-        from hermes_state_replay import project_session_prompt
         encoded = _json(project_session_prompt(db, conn, session_id, canonical_payload))
         admission_id = uuid.uuid4().hex
         conn.execute('''INSERT INTO session_admissions(admission_id,request_id,principal_id,

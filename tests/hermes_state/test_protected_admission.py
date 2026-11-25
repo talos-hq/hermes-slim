@@ -5,6 +5,7 @@ import json
 import pytest
 
 import hermes_state_runtime as runtime
+from gateway.session_ingress_media import ingress_fingerprint, reconcile_native_retry
 from hermes_state import SessionDB
 
 
@@ -18,12 +19,21 @@ def test_protected_ledger_projects_text_and_keeps_retry_identity(tmp_path, monke
         db.create_protected_session("fixture", "cli")
         epoch = runtime.begin_runtime_epoch(db, instance_id="fixture")
         identity = dict(epoch=epoch, principal_id="fixture", session_id="fixture", request_id="once")
-        payload = {"text": email, "nested": {"body": email}}
+        native = {"text": email}
+        payload = {"text": email, "native_text_v1": native}
+        native["ingress_sha256"] = ingress_fingerprint(payload)
         first = runtime.admit_session_input(db, **identity, payload=payload)
         assert email not in json.dumps(first)
         assert "[[CONVO_SAFE:" in first["payload"]["text"]
-        assert first["payload"]["text"] == first["payload"]["nested"]["body"]
+        assert first["payload"]["text"] == first["payload"]["native_text_v1"]["text"]
         assert runtime.admit_session_input(db, **identity, payload=payload) == first
+        retry = reconcile_native_retry(
+            db, principal_id="fixture", session_id="fixture", request_id="once", payload=payload,
+        )
+        assert retry == first["payload"]
+        assert runtime.admit_session_input(db, **identity, payload=retry) == first
+        with pytest.raises(runtime.RuntimeStoreError, match="admission_conflict"):
+            runtime.admit_session_input(db, **identity, payload=first["payload"], intent="steer")
         with pytest.raises(runtime.RuntimeStoreError, match="admission_conflict"):
             runtime.admit_session_input(db, **identity, payload={"text": "changed"})
 
