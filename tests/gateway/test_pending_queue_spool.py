@@ -278,3 +278,44 @@ def test_shutdown_pending_and_overflow_bind_redacted_text_to_original_session(sp
         rows = db.get_messages_as_conversation("original")
         box = session_request_keybox(db, "original")
         assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == addresses
+
+
+def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from agent.secret_scope import reset_multiplex_context, set_multiplex_context
+    from gateway.run import _profile_runtime_scope
+    from gateway.shutdown_flush import flush_overflow_to_file, flush_pending_to_file, recover_pending_spool
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "11" * 32)
+    named = spool_home / "profiles" / "named"
+    named.mkdir(parents=True)
+    (named / ".env").write_text(f"HERMES_CONVO_SAFE_MASTER_KEY={'22' * 32}\n")
+    address = "named-shutdown@example.org"
+    route = "agent:named:telegram:fixture"
+    token = set_multiplex_context(True)
+    try:
+        with SessionDB(db_path=named / "state.db") as db:
+            with _profile_runtime_scope(named):
+                db.create_protected_session("original", "test")
+            def resolver(*_a, **_kw):
+                return "original", db
+            assert flush_pending_to_file({route: address}, session_resolver=resolver) == 1
+            (spool,) = _spool_files(spool_home)
+            assert address.encode() not in spool.read_bytes()
+            held = "unresolved-shutdown@example.org"
+            assert flush_overflow_to_file({route: [held]}, session_resolver=lambda *_a, **_kw: None,
+                                         profile_resolver=lambda _key: named) == 1
+            sealed = [item.read_bytes() for item in _spool_files(spool_home) if item != spool]
+            assert len(sealed) == 1 and b"sealed_v1" in sealed[0] and held.encode() not in sealed[0]
+            assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: None)[0] == 0
+            assert len(_spool_files(spool_home)) == 2
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 2
+            with _profile_runtime_scope(named):
+                from agent.protected_request import session_request_keybox
+
+                box = session_request_keybox(db, "original")
+                rows = db.get_messages_as_conversation("original")
+                assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == (address, held)
+    finally:
+        reset_multiplex_context(token)
