@@ -103,6 +103,44 @@ def _seed_entry(store, key, session_id) -> SessionEntry:
     return entry
 
 
+def test_protected_reset_publishes_bound_row_before_changing_the_route(tmp_path, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from hermes_state import SessionDB
+    from hermes_state_replay import REPLAY_BINDING_KEY
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_protected_session("parent", "telegram")
+        store = _make_store(tmp_path, db)
+        key = store._generate_session_key(_source())
+        _seed_entry(store, key, "parent")
+        create = db.create_session
+
+        def check_create(*args, **kwargs):
+            assert not store._lock.held
+            return create(*args, **kwargs)
+
+        monkeypatch.setattr(db, "create_session", check_create)
+
+        def verify_route(_key, session_id, _origin):
+            assert db.get_session_model_config_value(session_id, REPLAY_BINDING_KEY, None)
+
+        store.route_named = verify_route
+        child = store.reset_session(key, replay_owner_id="parent")
+        assert child.session_id != "parent"
+        assert db.get_session(child.session_id)["parent_session_id"] == "parent"
+
+
+def test_shutdown_resolver_refuses_cached_route_created_after_flush(tmp_path):
+    db = _db_with_rows({})
+    store = _make_store(tmp_path, db)
+    key = store._generate_session_key(_source())
+    entry = _seed_entry(store, key, "replacement")
+    started = entry.created_at.timestamp()
+    assert store.resolve_session_id_for_key(key, not_after=started - 0.001) is None
+    assert store.resolve_session_id_for_key(key, not_after=started + 0.001) == ("replacement", db)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------

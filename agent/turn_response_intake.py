@@ -12,6 +12,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+from agent.protected_request import project_complete_response, request_keybox
 from agent.provider_projection import splice_provider_projection
 from agent.think_scrubber import THINK_TAG_NAMES
 from agent.trajectory import has_incomplete_scratchpad
@@ -183,15 +184,18 @@ def normalize_model_response(
 
     # Agent-as-provider projection: splice the provider-agent's own tool work in as
     # call/result rows before this turn's assistant message; no-op for ordinary providers.
-    splice_provider_projection(agent, response, messages)
-
-    _fire_post_api_request_hook(
-        agent, response, assistant_message, finish_reason, api_messages=api_messages,
-        api_call_count=api_call_count, api_duration=api_duration, api_start_time=api_start_time,
-        api_request_id=api_request_id, effective_task_id=effective_task_id, turn_id=turn_id,
-    )
-    from hermes_cli.observability.shared_metrics_harness import record_reply_content
-    record_reply_content(agent, response, assistant_message)
+    keybox = request_keybox(agent)
+    if keybox is None:
+        splice_provider_projection(agent, response, messages)
+        _fire_post_api_request_hook(
+            agent, response, assistant_message, finish_reason, api_messages=api_messages,
+            api_call_count=api_call_count, api_duration=api_duration, api_start_time=api_start_time,
+            api_request_id=api_request_id, effective_task_id=effective_task_id, turn_id=turn_id,
+        )
+        from hermes_cli.observability.shared_metrics_harness import record_reply_content
+        record_reply_content(agent, response, assistant_message)
+    else:
+        project_complete_response(keybox, assistant_message)
 
     content = assistant_message.content
     if content and not agent.quiet_mode:

@@ -542,7 +542,11 @@ def _run_single_query_mode(cli, query, image, quiet, oneshot, stream_json: bool 
                                     session_id=cli.session_id or "", exit_code=fail_code)
             exit_single_query(fail_code)  # credentials or agent init failed
         # No welcome banner (~420 ms cold); session id / resume hint come from _print_exit_summary().
-        _query_label = query or ("[image attached]" if single_query_images else "")
+        from hermes_state_replay import REPLAY_BINDING_KEY
+        _lookup = getattr(cli._session_db, "get_session_model_config_value", None)
+        _missing = object()
+        _bound = callable(_lookup) and _lookup(cli.session_id, REPLAY_BINDING_KEY, _missing) is not _missing
+        _query_label = "[protected query]" if _bound else query or ("[image attached]" if single_query_images else "")
         if _query_label:
             cli.console.print(f"[bold blue]{t('cli.single_query.query_label')}[/] {_query_label}")
         cli._show_security_advisories()

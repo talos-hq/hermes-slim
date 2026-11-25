@@ -1377,7 +1377,24 @@ _PRE_DB_HANDLERS = {
     "adopt": _cmd_adopt,  # native resumes on the owner; reads its own store read-only
 }
 _OBSERVATIONAL_DB_ACTIONS = frozenset({"list", "stats", "pinned"})
+
+
+def _cmd_create_protected(db, _args):
+    from hermes_state_ids import new_session_id
+    from hermes_state_replay import ProtectedReplayError
+
+    session_id = new_session_id()
+    try:
+        db.create_protected_session(session_id, "cli")
+    except ProtectedReplayError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(session_id)
+    return 0
+
+
 _DB_HANDLERS = {
+    "create-protected": _cmd_create_protected,
     "list": _cmd_list, "export": _cmd_export, "delete": _cmd_delete, "rename": _cmd_rename, "pinned": _cmd_pinned,
     "prune": partial(_cmd_prune_or_archive, action="prune"), "pin": partial(_cmd_pin, pinning=True),
     "archive": partial(_cmd_prune_or_archive, action="archive"), "unpin": partial(_cmd_pin, pinning=False),

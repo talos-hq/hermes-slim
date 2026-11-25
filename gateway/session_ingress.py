@@ -34,6 +34,29 @@ _CONTENT_CLAUSES = frozenset({
 # Nothing was committed (main's busy-queue cap); /retry answers it before rewriting (#139257).
 QUEUE_FULL_REPLY = ('⏳ Too many messages are already waiting in this conversation; '
                     'send this again after the current reply.')
+PROTECTED_QUEUE_UNAVAILABLE = 'Protected queue unavailable. Please resend when the session is available.'
+
+
+def allows_volatile_busy_queue(store, session_key):
+    """Require durable admission for protected routes and unresolved protected profiles."""
+    import sqlite3
+
+    from agent.secret_scope import is_multiplex_active
+    from hermes_cli.config import get_env_value
+    from hermes_state_replay import ProtectedReplayError, REPLAY_BINDING_KEY, require_replay_binding_if_recorded
+
+    resolver = getattr(store, "resolve_session_id_for_key", None)
+    try:
+        resolved = resolver(session_key) if callable(resolver) else None
+        if resolved is None:
+            return not is_multiplex_active() and not get_env_value("HERMES_CONVO_SAFE_MASTER_KEY")
+        session_id, db = resolved
+        if db.get_session_model_config_value(session_id, REPLAY_BINDING_KEY, None) is not None:
+            return False
+        require_replay_binding_if_recorded(db.db_path, session_id)
+    except (OSError, sqlite3.Error, ProtectedReplayError):
+        return False
+    return True
 
 
 async def admit_message(authority, event):

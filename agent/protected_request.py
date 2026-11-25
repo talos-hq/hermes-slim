@@ -1,0 +1,147 @@
+"""Project model request data for a session with a saved replay binding."""
+
+import json
+
+from hermes_state_replay import REPLAY_BINDING_KEY, ProtectedReplayError, _open_sidecar, _project_value, project_replay_text
+from hermes_state_replay import require_replay_binding_if_recorded
+
+# These fields belong to the transport. They do not carry transcript text.
+_TRANSPORT_KEYS = {"model", "extra_headers", "timeout", "stream_options"}
+_PROTOCOL_KEYS = {"id", "role", "type", "name", "tool_call_id", "call_id"}
+
+
+def request_keybox(agent):
+    """Open a writable Keybox only for a bound session."""
+    return session_request_keybox(getattr(agent, "_session_db", None), getattr(agent, "session_id", None))
+
+
+def session_request_keybox(store, session_id):
+    """Resolve a saved binding for a request outside the main agent turn."""
+    lookup = getattr(store, "get_session_model_config_value", None)
+    if not session_id or not callable(lookup):
+        return None
+    absent = object()
+    binding = lookup(session_id, REPLAY_BINDING_KEY, absent)
+    path = getattr(store, "db_path", None)
+    if binding is absent:
+        require_replay_binding_if_recorded(path, session_id)
+        return None
+    if path is None:
+        raise ProtectedReplayError("Protected provider request has no local transcript store")
+    return _open_sidecar(path, session_id, binding, writable=True)
+
+
+def _project(keybox, value, *, protocol=True):
+    if isinstance(value, str):
+        return project_replay_text(keybox, value)
+    if isinstance(value, (tuple, list)):
+        return [_project(keybox, item, protocol=protocol) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if value.get("type") in ("image", "image_url", "input_image", "input_audio", "input_file"):
+        raise ProtectedReplayError("Protected provider request contains an unsupported attachment")
+    if "encrypted_content" in value:
+        raise ProtectedReplayError("Protected provider request contains opaque reasoning")
+    projected = {}
+    for name, item in value.items():
+        safe_name = _project(keybox, name, protocol=False)
+        if protocol and safe_name != name:
+            raise ProtectedReplayError("Protected request contains a sensitive protocol key")
+        if protocol and name in _PROTOCOL_KEYS:
+            if _project(keybox, item, protocol=False) != item:
+                raise ProtectedReplayError("Protected request contains a sensitive protocol identifier")
+            projected[name] = item
+        elif protocol and name == "arguments" and isinstance(item, str):
+            decoded = json.loads(item)
+            safe = _project_value(keybox, decoded)
+            projected[name] = item if safe == decoded else json.dumps(safe)
+        else:
+            if safe_name in projected:
+                raise ProtectedReplayError("Protected object keys collide after redaction")
+            projected[safe_name] = _project(keybox, item, protocol=protocol)
+    return projected
+
+
+def project_request(keybox, request):
+    """Return a projected copy, preserving transport configuration."""
+    if keybox is None:
+        return request
+    try:
+        return {name: value if name in _TRANSPORT_KEYS else _project(keybox, value)
+                for name, value in request.items()}
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected provider request could not be projected") from None
+
+
+def project_observer_history(keybox, messages, user_text, *, protocol=True):
+    """Keep the request observer's history and user payload at the same boundary."""
+    if keybox is None:
+        return messages, user_text
+    try:
+        return _project(keybox, messages, protocol=protocol), _project(keybox, user_text, protocol=protocol)
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected request history could not be projected") from None
+
+
+def project_complete_response(keybox, assistant_message):
+    """Project a complete provider message before it reaches response sinks."""
+    if keybox is None:
+        return
+    try:
+        assistant_message.content = _project(keybox, assistant_message.content)
+        assistant_message.reasoning = _project(keybox, getattr(assistant_message, "reasoning", None))
+        assistant_message.provider_data = _project(keybox, getattr(assistant_message, "provider_data", None))
+        for call in assistant_message.tool_calls or ():
+            arguments = call.function.arguments
+            projected = _project(keybox, {"arguments": arguments})["arguments"]
+            if projected != arguments or (isinstance(arguments, str) and "[[CONVO_SAFE:" in arguments):
+                raise ProtectedReplayError("Protected tool arguments require local restoration")
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected provider response could not be projected") from None
+
+
+def project_tool_result(agent, result):
+    """Project the result before tool middleware or transcript sinks receive it."""
+    keybox = request_keybox(agent)
+    if keybox is None:
+        return result
+    if not isinstance(result, (str, dict, list, tuple, int, float, type(None))):
+        raise ProtectedReplayError("Protected tool result uses an unsupported format")
+    try:
+        if isinstance(result, str) and result.lstrip().startswith(("{", "[")):
+            try:
+                decoded = json.loads(result)
+            except ValueError:
+                decoded = None
+            if decoded is not None:
+                safe = _project(keybox, decoded, protocol=False)
+                return result if safe == decoded else json.dumps(safe, ensure_ascii=False)
+        return _project(keybox, result, protocol=False)
+    except (ValueError, RuntimeError):
+        raise ProtectedReplayError("Protected tool result could not be projected") from None
+
+
+def protected_tool_arguments(agent, arguments):
+    """Return safe observer arguments and whether dispatch would require restoration."""
+    keybox = request_keybox(agent)
+    if keybox is None:
+        return arguments, False
+    try:
+        projected = _project(keybox, arguments, protocol=False)
+    except (ValueError, RuntimeError):
+        return {}, True
+    return projected, projected != arguments or "[[CONVO_SAFE:" in json.dumps(projected)
+
+
+def project_compression_input(compressor, history):
+    """Project structured records before the compressor serializes them."""
+    keybox = session_request_keybox(compressor._session_db, compressor._session_id)
+    return project_observer_history(keybox, history, None)[0]
+
+
+def protected_child_config(store, parent_id, child_id, model_config):
+    """Publish the child sidecar before SQLite makes the child visible."""
+    from hermes_state_replay import fork_replay_config
+
+    keybox = session_request_keybox(store, parent_id)
+    return model_config if keybox is None else fork_replay_config(store.db_path, keybox, child_id, model_config)

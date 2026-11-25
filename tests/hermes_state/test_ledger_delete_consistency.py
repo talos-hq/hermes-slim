@@ -210,6 +210,43 @@ def test_local_reset_refuses_over_started_admission_then_fences_generation(tmp_p
                                          adoption_secret='private-fixture')
 
 
+def test_protected_local_reset_preserves_queued_automation(tmp_path, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from agent.protected_request import session_request_keybox
+    from hermes_state_local_lineage import reset_local_target
+    from hermes_state_replay import ProtectedReplayError, REPLAY_BINDING_KEY
+    from hermes_state_replay_init import _prepare_sidecar
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    email = "local-automation@example.org"
+    with closing(SessionDB(tmp_path / 'state.db')) as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        sid, reset = _local_session(db, epoch)
+        reset_local_target(db, epoch=epoch, parent_session_id=sid, entry=reset)
+        parent = reset['session_id']
+        binding, _box = _prepare_sidecar(db.db_path, parent)
+        db.patch_session_model_config(parent, {REPLAY_BINDING_KEY: binding})
+        identity = dict(epoch=epoch, principal_id='automation:route', session_id=sid, request_id='once')
+        payload = {'text': email, 'local_automation_v1': {'owner': sid, 'target': parent}}
+        queued = rt.admit_session_input(db, **identity, payload=payload)
+        assert "[[CONVO_SAFE:" in queued['payload']['text']
+        db.create_session('plain', 'test')
+        retarget = dict(epoch=epoch, session_id=sid, principal_id='automation:route', old_targets=[parent])
+        with pytest.raises(ProtectedReplayError):
+            rt.retarget_local_automation(db, **retarget, new_target='plain')
+
+        target = 'new-target'
+        reset_local_target(db, epoch=epoch, parent_session_id=parent, entry={**reset, 'session_id': target})
+        moved = rt.retarget_local_automation(db, **retarget, new_target=target)
+        assert moved == [queued['admission_id']]
+        payload['local_automation_v1']['target'] = target
+        retried = rt.admit_session_input(db, **identity, payload=payload)
+        assert retried['admission_id'] == queued['admission_id']
+        keybox = session_request_keybox(db, target)
+        assert keybox.restore_strict(keybox.replay_session, retried['payload']['text'], 1024) == email
+    assert email.encode() not in (tmp_path / 'state.db').read_bytes()
+
+
 @pytest.mark.parametrize('adopted', [False, True], ids=['registered', 'running'])
 def test_local_reset_refuses_over_live_compute_worker_but_not_a_queued_follower(tmp_path, adopted):
     """A registered/running worker is executing even though no admission is 'started' (an

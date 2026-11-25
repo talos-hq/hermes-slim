@@ -19,6 +19,13 @@ from agent.title_generator import (
 from hermes_state import SessionDB
 
 
+
+def _unprotected_store_mock():
+    db = MagicMock()
+    db.get_session_model_config_value.side_effect = lambda _sid, _key, default=None: default
+    return db
+
+
 class TestGenerateTitle:
     """Unit tests for generate_title()."""
 
@@ -357,7 +364,7 @@ class TestAutoTitleSession:
         assert seen == []
 
     def test_invokes_title_callback_after_setting_title(self):
-        db = MagicMock()
+        db = _unprotected_store_mock()
         db.get_session_title_source.return_value = None
         db.set_auto_title.return_value = True
         seen = []
@@ -396,7 +403,7 @@ class TestAutoTitleSession:
 
 
     def test_body_exception_routed_to_failure_callback(self):
-        db = MagicMock()
+        db = _unprotected_store_mock()
         db.get_session_title.return_value = None
         db.get_session_title_source.return_value = None
         seen = []
@@ -436,7 +443,7 @@ class TestMaybeAutoTitle:
         it after the turn; every other route keeps the turn-start timing."""
         import threading
         from agent import title_generator as tg
-        db = MagicMock()
+        db = _unprotected_store_mock()
         db.get_session_title.return_value = None
         started = threading.Event()
         with patch.object(tg, "_title_config", return_value=title_cfg), \
@@ -774,7 +781,7 @@ class TestAutoTitleDuplicateHandling:
         assert db.get_session_title("sess-1") == "hi #2"
 
     def test_dedupes_duplicate_title_via_lineage(self):
-        db = MagicMock()
+        db = _unprotected_store_mock()
         db.get_session_title_source.return_value = None
         # Atomic write path: collision raises ValueError, retry persists.
         db.set_auto_title.side_effect = [ValueError("in use"), True]
@@ -872,7 +879,7 @@ class TestModelSwitchMarkerNotTitleable:
         question look like turn 2 — and titling bailed out entirely, leaving
         the session permanently untitled.
         """
-        db = MagicMock()
+        db = _unprotected_store_mock()
         db.get_session_title.return_value = None
         db.get_session_title_source.return_value = None
         history = [
@@ -891,10 +898,26 @@ class TestModelSwitchMarkerNotTitleable:
     def test_instant_title_skips_marker_uses_real_message(self):
         from agent.title_generator import apply_instant_title
 
-        db = MagicMock()
+        db = _unprotected_store_mock()
         db.get_session_title_source.return_value = None
 
         assert apply_instant_title(db, "sess-1", self.MARKER) is None
         assert apply_instant_title(db, "sess-1", "南京市秦淮区 小时级天气预报") == (
             "南京市秦淮区 小时级天气预报"
         )
+
+
+def test_protected_session_skips_titles_derived_from_user_text(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent import title_generator
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("a protected title reached text derivation or its provider")
+
+    monkeypatch.setattr(title_generator, "derive_title", forbidden)
+    monkeypatch.setattr(title_generator, "generate_title", forbidden)
+    db = SimpleNamespace(get_session_model_config_value=lambda *_: {"scope": 1})
+    assert title_generator.apply_instant_title(db, "protected", "fixture@example.org") is None
+    assert title_generator.maybe_auto_title(db, "protected", "fixture@example.org") is None
+    assert title_generator.auto_title_session(db, "protected", "fixture@example.org") is None

@@ -55,3 +55,35 @@ def test_no_recovery_file_on_empty_history(tmp_path, monkeypatch):
     assert not list(flush_dir.glob("*.json"))
 
 
+def test_protected_snapshot_projects_history_when_sqlite_flush_fails(tmp_path, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from types import SimpleNamespace
+    from agent.protected_request import session_request_keybox
+    from gateway.run import GatewayRunner
+    from hermes_state import SessionDB
+
+    flush_dir = _make_flush_dir(tmp_path)
+    monkeypatch.setattr("gateway.shutdown_flush._get_flush_dir", lambda: flush_dir)
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    address = "in-flight@example.org"
+
+    def fail(_history):
+        raise OSError("fixture database unavailable")
+
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_protected_session("protected", "test")
+        agent = SimpleNamespace(session_id="protected", _session_db=db,
+                                _session_messages=[{"role": "user", "content": address}],
+                                _flush_messages_to_session_db=fail)
+        GatewayRunner._flush_agent_transcript_at_shutdown(agent)
+        (snapshot,) = flush_dir.glob("*.json")
+        raw = snapshot.read_text(encoding="utf-8")
+        assert address not in raw
+        text = json.loads(raw)["messages"][0]["content"]
+        box = session_request_keybox(db, "protected")
+        assert box.restore_strict(box.replay_session, text, 1024) == address
+        monkeypatch.delenv("HERMES_CONVO_SAFE_MASTER_KEY")
+        GatewayRunner._flush_agent_transcript_at_shutdown(agent)
+        assert list(flush_dir.glob("*.json")) == [snapshot]
+
+

@@ -56,7 +56,9 @@ def _get_flush_dir():
 def _write_payload(flush_dir: Path, payload: dict[str, Any]) -> Path:
     """Atomically write one private, uniquely named recovery payload; return its path."""
     from utils import atomic_json_write
-    final_path = flush_dir / f"pending-{uuid.uuid4().hex}.json"
+    protected = payload.get("replay_tag") or "sealed_v1" in (payload.get("data") or {})
+    prefix = "pending-sealed" if protected else "pending"
+    final_path = flush_dir / f"{prefix}-{uuid.uuid4().hex}.json"
     atomic_json_write(final_path, payload, mode=0o600, default=str)
     if os.name == "posix":
         # Persist the directory entry too; keep the published file (the only recovery copy) even if
@@ -75,33 +77,84 @@ def _write_payload(flush_dir: Path, payload: dict[str, Any]) -> Path:
     return final_path
 
 
-def _flush_value(flush_dir: Path, kind: str, session_key: str, value: Any, **extra: Any) -> bool:
+def _pending_profile_scope(home):
+    """Use the resolved database owner's credentials during mux shutdown and recovery."""
+    from contextlib import nullcontext
+    from agent.secret_scope import is_multiplex_active
+
+    if is_multiplex_active() and home is not None:
+        from gateway.run import _profile_runtime_scope
+
+        return _profile_runtime_scope(home)
+    return nullcontext()
+
+
+def _project_pending(serialised, resolver, profile_resolver, payload):
+    from agent.protected_request import session_request_keybox
+    from agent.secret_scope import is_multiplex_active
+    from hermes_state import _default_db_path
+    from hermes_state_replay import ProtectedReplayError, _project_value
+    from hermes_state_replay_fallback import project_fallback_records
+    from hermes_cli.config import get_env_value
+    from gateway.shutdown_sealed_spool import bind_pending, seal_pending
+
+    session_key = payload["session_key"]
+    resolved = resolver(session_key, not_after=payload.get("ts")) if resolver is not None else None
+    if resolved and resolved[1] is not None:
+        session_id, db = resolved
+        with _pending_profile_scope(getattr(getattr(db, "db_path", None), "parent", None)):
+            keybox = session_request_keybox(db, session_id)
+            if keybox is None:
+                return {**payload, "data": serialised}
+            return bind_pending(_project_value(keybox, serialised), payload, session_id)
+    home = profile_resolver(session_key) if profile_resolver is not None else None
+    if home is None and is_multiplex_active():
+        raise ProtectedReplayError("Pending message has no verified profile owner")
+    with _pending_profile_scope(home):
+        if get_env_value("HERMES_CONVO_SAFE_MASTER_KEY"):
+            return {**payload, "data": seal_pending(serialised, payload)}
+        db_path = _default_db_path()
+        if (db_path.parent / "protected-transcripts").exists():
+            raise ProtectedReplayError("Pending message cannot be saved without the profile master key")
+        session_id = serialised.get("session_id") or session_key
+        records, protected_path = project_fallback_records(db_path, session_id, [serialised])
+        if protected_path is not None:
+            return bind_pending(records[0], payload, session_id)
+        return {**payload, "data": records[0]}
+
+
+def _flush_value(flush_dir: Path, kind: str, session_key: str, value: Any, *,
+                 session_resolver=None, profile_resolver=None, **extra: Any) -> bool:
     """Serialise and write one pending value; return True when a payload was written."""
     try:
         serialised = _serialise_value(value)
         if serialised is None:
             return False
-        _write_payload(flush_dir, {"session_key": session_key, **extra, "data": serialised})
+        payload = {"session_key": session_key, **extra}
+        _write_payload(flush_dir, _project_pending(serialised, session_resolver, profile_resolver, payload))
         return True
     except Exception as exc:
         logger.debug("Failed to flush %s message for %s: %s", kind, session_key, exc)
         return False
 
 
-def flush_pending_to_file(pending: dict[str, Any], *, reason: str = "shutdown") -> int:
+def flush_pending_to_file(pending: dict[str, Any], *, reason: str = "shutdown",
+                          session_resolver=None, profile_resolver=None) -> int:
     """Serialise non-empty ``_pending_messages`` slots (``MessageEvent`` or str); return count."""
     if not pending:
         return 0
-    flush_dir, ts, flushed = _get_flush_dir(), int(time.time()), 0
+    flush_dir, ts, flushed = _get_flush_dir(), time.time(), 0
     for session_key, value in list(pending.items()):
         if value is not None:
-            flushed += _flush_value(flush_dir, "pending", session_key, value, reason=reason, ts=ts)
+            flushed += _flush_value(flush_dir, "pending", session_key, value, session_resolver=session_resolver,
+                                    profile_resolver=profile_resolver, reason=reason, ts=ts)
     if flushed:
         logger.info("Flushed %d pending message(s) to %s (reason=%s)", flushed, flush_dir, reason)
     return flushed
 
 
-def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str = "shutdown") -> int:
+def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str = "shutdown",
+                           session_resolver=None, profile_resolver=None) -> int:
     """Serialise the FIFO overflow tails (``queued_events``) to disk; return events flushed.
 
     The adapter slot holds the queue head and ``SessionState.conversation.queued_events`` the
@@ -110,18 +163,56 @@ def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str =
     """
     if not overflow_by_session:
         return 0
-    flush_dir, ts, flushed = _get_flush_dir(), int(time.time()), 0
+    flush_dir, ts, flushed = _get_flush_dir(), time.time(), 0
     for session_key, events in list(overflow_by_session.items()):
         if not session_key or not events:
             continue
         for seq, value in enumerate(list(events)):
             if value is not None:
-                flushed += _flush_value(flush_dir, "overflow", session_key, value, reason=reason,
+                flushed += _flush_value(flush_dir, "overflow", session_key, value,
+                                        session_resolver=session_resolver, profile_resolver=profile_resolver, reason=reason,
                                         ts=ts, seq=seq)
     if flushed:
         logger.info("Flushed %d queued overflow message(s) to %s (reason=%s)", flushed, flush_dir,
                     reason)
     return flushed
+
+
+def _pending_profile_home(store, session_key):
+    from agent.secret_scope import is_multiplex_active
+
+    if store is None or not is_multiplex_active():
+        return None
+    owner = store._profile_home_for_key(session_key)
+    if owner is None and store._named_profile_for_key(session_key) is None:
+        owner = getattr(store, "_routing_home", None)
+    return owner
+
+
+def flush_runner_pending(runner) -> None:
+    """Save the pending head and overflow tail before clearing live state."""
+    from contextlib import suppress
+    from functools import partial
+
+    store = getattr(runner, "session_store", None)
+    resolver = getattr(store, "resolve_session_id_for_key", None)
+    profile = partial(_pending_profile_home, store)
+    with suppress(Exception):
+        flush_pending_to_file(dict(runner._pending_messages), session_resolver=resolver, profile_resolver=profile)
+    with suppress(Exception):
+        overflow = getattr(runner, "_queued_events", None) or {}
+        flush_overflow_to_file({key: list(events) for key, events in dict(overflow).items() if events},
+                               session_resolver=resolver, profile_resolver=profile)
+
+
+def flush_adapter_pending(adapter) -> None:
+    """Save an adapter's pending messages using its own routing store."""
+    from functools import partial
+
+    store = getattr(adapter, "_session_store", None)
+    flush_pending_to_file(adapter._pending_messages, reason="adapter_shutdown",
+                          session_resolver=getattr(store, "resolve_session_id_for_key", None),
+                          profile_resolver=partial(_pending_profile_home, store))
 
 
 def spool_dropped_transcript_message(session_id: str, message: dict[str, Any]) -> Optional[Path]:
@@ -133,20 +224,21 @@ def spool_dropped_transcript_message(session_id: str, message: dict[str, Any]) -
     """
     try:
         from hermes_state import _default_db_path
-        from hermes_state_replay import require_plaintext_fallback_allowed
+        from hermes_state_replay_fallback import project_fallback_records
 
-        require_plaintext_fallback_allowed(_default_db_path(), session_id)
+        records, _ = project_fallback_records(_default_db_path(), session_id, [message])
         return _write_payload(_get_flush_dir(), {
             "session_key": session_id, "reason": TRANSCRIPT_CAP_DROP_REASON, "ts": int(time.time()),
             "seq": next(_TRANSCRIPT_SPOOL_SEQ),
-            "data": {"session_id": session_id, "message": message},
+            "data": {"session_id": session_id, "message": records[0]},
         })
     except Exception as exc:
         logger.debug("Failed to spool cap-dropped transcript message for %s: %s", session_id, exc)
         return None
 
 
-def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = False) -> tuple[int, int]:
+def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = False,
+                           with_receipt: bool = False) -> tuple[int, int]:
     """Replay cap-dropped transcript messages spooled for *session_id*; return ``(replayed,
     remaining)``. ``replay(message_dict)`` runs per message in drop order; a spool file is deleted
     only after its replay succeeds. The first failure stops the drain (the DB is likely still
@@ -184,7 +276,10 @@ def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = 
     ordered, replayed, remaining = sorted(entries, key=lambda e: e[0]), 0, 0
     for idx, (_key, path, message) in enumerate(ordered):
         try:
-            replay(message)
+            if with_receipt:
+                replay(message, _transcript_spool_receipt(path))
+            else:
+                replay(message)
         except Exception as exc:
             if is_row_rejection(exc):  # no retry can write it, so it must not hold the session back
                 _quarantine_spool_file(path, session_id, exc)
@@ -200,6 +295,10 @@ def drain_transcript_spool(session_id: str, replay, *, db_known_failing: bool = 
         logger.info("Replayed %d spooled transcript message(s) for %s after DB recovery", replayed,
                     session_id)
     return replayed, remaining
+
+
+def _transcript_spool_receipt(path: Path) -> str:
+    return "gateway.transcript_spool.v1." + path.stem
 
 
 def _json_safe(value: Any) -> bool:
@@ -295,7 +394,7 @@ def _quarantine_spool_file(path: Path, session_id: str, exc: BaseException) -> N
                    session_id, exc, target)
 
 
-def _order_flush_files(paths) -> list[Path]:
+def _order_flush_files(paths, verified=None) -> list[Path]:
     """Order recovery payloads by :func:`_spool_sort_key`, as :func:`drain_transcript_spool` does.
     ``SessionDB`` restores a conversation by AUTOINCREMENT id and spool files have random names, so
     any other order permanently scrambles the recovered transcript.
@@ -306,7 +405,8 @@ def _order_flush_files(paths) -> list[Path]:
     entries = []
     for path in paths:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            payload = verified[path] if verified is not None and path in verified else json.loads(
+                path.read_text(encoding="utf-8-sig"))
         # OSError: unreadable; ValueError: bad JSON or bytes; RecursionError: nesting too deep.
         except (OSError, ValueError, RecursionError):
             payload = None
@@ -316,6 +416,39 @@ def _order_flush_files(paths) -> list[Path]:
             entries.append(((1, 0.0, 0.0, path.name), path))
     entries.sort(key=lambda entry: entry[0])
     return [path for _key, path in entries]
+
+
+def _authenticate_sealed_batch(paths, session_resolver):
+    """Verify sealed metadata before it can influence the order of appends."""
+    from gateway.shutdown_sealed_spool import unseal_pending, verify_bound_pending
+
+    verified = {}
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, RecursionError):
+            if path.name.startswith("pending-sealed-"):
+                return None
+            continue
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or ("sealed_v1" not in data and not payload.get("replay_tag")):
+            if path.name.startswith("pending-sealed-"):
+                return None
+            continue
+        try:
+            resolved = session_resolver(payload["session_key"], not_after=payload.get("ts")) if session_resolver else None
+            if not resolved or resolved[1] is None:
+                return None
+            with _pending_profile_scope(resolved[1].db_path.parent):
+                if "sealed_v1" in data:
+                    unseal_pending(data, payload)
+                else:
+                    verify_bound_pending(data, payload)
+        except Exception:  # health: allow BLE001 -- unavailable profile, key or ciphertext must hold the queue
+            logger.warning("Sealed pending queue could not be verified; preserving queued files")
+            return None
+        verified[path] = payload
+    return verified
 
 
 def recover_pending_to_db(session_db=None, *, session_resolver=None) -> int:
@@ -336,7 +469,9 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
     messages recovered, and the session ids whose spool files this pass held back after a failed
     replay, so the live writer can drain them before that session's next row.
     """
-    flush_files = _order_flush_files(_get_flush_dir().glob("*.json"))
+    paths = [path for path in _get_flush_dir().glob("*.json") if path not in _REPLAYED_UNREMOVABLE]
+    verified = _authenticate_sealed_batch(paths, session_resolver)
+    flush_files = _order_flush_files(paths, verified)
     if not flush_files:
         return 0, set()
     own_db = session_db is None
@@ -347,26 +482,47 @@ def recover_pending_spool(session_db=None, *, session_resolver=None) -> tuple[in
     # Sessions whose spool replay already failed this pass -> files held back for them. Ordering is a
     # per-session property, so one unhealthy session must not hold back the others.
     blocked_sessions: dict[str, int] = {}
+    blocked_routes: set[str] = set()
     try:
         for path in flush_files:
             if path in _REPLAYED_UNREMOVABLE:
                 continue
             # One unparseable payload or rejected append must only skip THIS file: the file is
             # never unlinked, so aborting the pass would re-poison every later boot.
+            protected_route = None
             try:
-                payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                payload = verified[path] if verified is not None and path in verified else json.loads(
+                    path.read_text(encoding="utf-8-sig"))
                 # Agent-history snapshots use a different schema (reason +
                 # messages list) and are meant for manual operator recovery,
                 # not automatic DB insertion. Skip them silently.
                 if payload.get("reason") == AGENT_HISTORY_REASON:
                     continue
+                if verified is None and payload.get("reason") != TRANSCRIPT_CAP_DROP_REASON:
+                    continue
+                route = payload.get("session_key")
+                if isinstance(route, str) and route in blocked_routes:
+                    continue
+                data = payload.get("data")
+                if isinstance(data, dict) and ("sealed_v1" in data or payload.get("replay_tag")) and (
+                    verified is None or path not in verified
+                ):
+                    continue
+                if isinstance(route, str) and isinstance(data, dict) and (
+                    payload.get("replay_session") or "sealed_v1" in data
+                ):
+                    protected_route = route
                 if _recover_one_payload(session_db, path, payload,
                                         session_resolver=session_resolver,
                                         blocked_sessions=blocked_sessions):
                     recovered += 1
                     _remove_replayed(path, payload.get("session_key", ""))
+                elif protected_route:
+                    blocked_routes.add(protected_route)
             # health: allow BLE001 -- per-file boundary moved unchanged from recover_pending_to_db; a traceback per locked-DB file would only add noise
             except Exception as exc:
+                if protected_route:
+                    blocked_routes.add(protected_route)
                 logger.warning("Failed to recover pending message from %s: %s", path, exc)
     finally:
         if own_db:  # shutdown cancellation/interrupt must not strand an owned DB
@@ -404,7 +560,9 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
             blocked_sessions[spooled_sid] += 1
             return False
         try:
-            session_db.append_message(**transcript_append_kwargs(spooled_sid, message, fallback_ts=payload.get("ts")))
+            session_db.append_message(
+                **transcript_append_kwargs(spooled_sid, message, fallback_ts=payload.get("ts")),
+                spool_receipt=_transcript_spool_receipt(path))
         except Exception as exc:
             if is_row_rejection(exc):  # no retry can write it, so it must not hold the session back
                 _quarantine_spool_file(path, spooled_sid, exc)
@@ -416,7 +574,8 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
         return True
     session_key, data = payload.get("session_key", ""), payload.get("data", {})
     text = data.get("text", "")
-    if not text or not session_key:
+    sealed = "sealed_v1" in data
+    if not (text or sealed) or not session_key:
         logger.warning("Cannot recover structurally invalid pending message from %s; "
                        "the flush file has been preserved", path)
         return False
@@ -426,7 +585,8 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
     # carry a session_id; a resolver-resolved payload goes to the resolver's db alone, never the
     # ambient root store (a None db from the resolver is not a fallback signal — it is "preserve").
     session_id, target_db = data.get("session_id", ""), session_db
-    if not session_id and session_resolver is not None:
+    replay_session = payload.get("replay_session")
+    if (not session_id or replay_session or sealed) and session_resolver is not None:
         try:
             resolved = session_resolver(session_key, not_after=payload.get("ts"))
         except Exception as exc:
@@ -439,8 +599,29 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
                        "session_key-to-id resolution failed. "
                        "The message text is preserved in %s", session_key, path)
         return False
-    target_db.append_message(session_id=session_id, role="user", content=text,
-                             timestamp=payload.get("ts", int(time.time())))
+    home = getattr(getattr(target_db, "db_path", None), "parent", None)
+    with _pending_profile_scope(home):
+        if replay_session or sealed:
+            from agent.protected_request import session_request_keybox
+
+            if ((replay_session and replay_session != session_id)
+                    or session_request_keybox(target_db, session_id) is None):
+                return False
+        if sealed or replay_session:
+            from gateway.shutdown_sealed_spool import (
+                append_protected_pending, sealed_pending_receipt, unseal_pending, verify_bound_pending)
+
+            if sealed:
+                text = unseal_pending(data, payload).get("text", "")
+                receipt = sealed_pending_receipt(data)
+            else:
+                receipt = verify_bound_pending(data, payload)
+            if not text:
+                return False
+            append_protected_pending(target_db, session_id, receipt, payload, text)
+        else:
+            target_db.append_message(session_id=session_id, role="user", content=text,
+                                     timestamp=payload.get("ts", int(time.time())))
     return True
 
 
@@ -478,7 +659,7 @@ def recover_gateway_pending(runner) -> int:
     return recovered
 
 
-def flush_agent_history_to_file(session_id: Optional[str], history: list) -> None:
+def flush_agent_history_to_file(session_id: Optional[str], history: list, *, db_path=None) -> None:
     """Best-effort dump of an agent's in-memory transcript before teardown. Used when
     ``_flush_messages_to_session_db`` raises (e.g. FTS/SQLite corruption): the transcript is written
     outside the broken DB so an operator can salvage it after repairing state.db. Failures are
@@ -486,7 +667,10 @@ def flush_agent_history_to_file(session_id: Optional[str], history: list) -> Non
     if not history:
         return
     try:
-        flush_dir = _get_flush_dir()
+        from hermes_state import _default_db_path
+        from hermes_state_replay_fallback import project_fallback_records
+
+        db_path = db_path or _default_db_path()
         snapshot = []
         for _m in history:
             try:
@@ -494,10 +678,12 @@ def flush_agent_history_to_file(session_id: Optional[str], history: list) -> Non
                 snapshot.append(_m if plain else str(_m))
             except Exception:
                 continue
-        _write_payload(flush_dir, {
-            "reason": AGENT_HISTORY_REASON, "issue": "#72680",
-            "session_id": session_id, "count": len(snapshot), "messages": snapshot,
-        })
+        with _pending_profile_scope(db_path.parent):
+            protected, _ = project_fallback_records(db_path, session_id or "", snapshot)
+            _write_payload(_get_flush_dir(), {
+                "reason": AGENT_HISTORY_REASON, "issue": "#72680",
+                "session_id": session_id, "count": len(protected), "messages": protected,
+            })
         logger.warning("Preserved %d in-memory message(s) for session %s "
                        "(possible FTS corruption — recover after repairing state.db)",
                        len(snapshot), session_id)

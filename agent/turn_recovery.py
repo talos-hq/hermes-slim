@@ -835,6 +835,19 @@ def settle_delivered_partial(agent: Any, messages: Any, current_turn_user_idx: A
     return collapsed
 
 
+def _project_error_detail(agent: Any, detail: str, *, limit: int | None = None) -> str:
+    from agent.protected_request import project_observer_history, request_keybox
+
+    try:
+        keybox = request_keybox(agent)
+        _, safe_detail = project_observer_history(keybox, None, detail)
+    except (ValueError, RuntimeError, OSError):
+        return "Provider error details unavailable"
+    if limit is not None and len(safe_detail) > limit:
+        return safe_detail[:limit] if keybox is None else "Provider error details exceed display limit"
+    return safe_detail
+
+
 def _with_delivered_partial(final_response: str, error_summary: str, delivered: str) -> tuple:
     """Prepend delivered partial text to a terminal error body ("" unchanged).
 
@@ -1044,7 +1057,7 @@ def nonretryable_client_error_result(
     agent._flush_status_buffer()
     # Summarize once: Cloudflare/proxy HTML pages and raw provider bodies must be
     # collapsed here or they leak verbatim via the ``error`` field.
-    _nonretryable_summary = agent._summarize_api_error(api_error)
+    _nonretryable_summary = _project_error_detail(agent, agent._summarize_api_error(api_error))
     _plabel = provider_label_for(provider)
     _label = _NONRETRYABLE_LABELS.get(classified.reason, f"{_plabel} rejected the request and retrying won't help")
     agent._emit_diagnostic_status(f"❌ {_label}: {_nonretryable_summary}")
@@ -1105,7 +1118,7 @@ def nonretryable_client_error_result(
             "      • Self-signed local endpoint (llama.cpp, LM Studio, vLLM)? Use http://",
             "        for localhost, or add the server's cert to your trust store.",
         )
-    logger.error("%sNon-retryable client error: %s", agent.log_prefix, api_error)
+    logger.error("%sNon-retryable client error: %s", agent.log_prefix, _project_error_detail(agent, str(api_error)))
     # Skip persistence on likely context-overflow (400 + large session): persisting the
     # failed message grows the session and repeats the failure.
     # Persisting the failed user message would make the session even larger, causing the same failure on the
@@ -1182,7 +1195,7 @@ def max_retries_exhausted_result(
     )
 
     agent._flush_status_buffer()
-    _final_summary = agent._summarize_api_error(api_error)
+    _final_summary = _project_error_detail(agent, agent._summarize_api_error(api_error))
     _billing_guidance = ""
     _is_billing = classified.reason == FailoverReason.billing
     if _is_billing:
@@ -1322,7 +1335,7 @@ def log_api_error_attempt(
     and sends readers hunting for a retry bug (#73237)."""
     error_type = type(api_error).__name__
     error_msg = str(api_error).lower()
-    _error_summary = agent._summarize_api_error(api_error)
+    _error_summary = _project_error_detail(agent, agent._summarize_api_error(api_error))
     _attempt = f"attempt {retry_count}/{max_retries}" + ("" if retryable else ", not retryable")
     logger.warning(
         "API call failed (%s) error_type=%s %s summary=%s",
@@ -1343,7 +1356,7 @@ def log_api_error_attempt(
         )
         if status_code and status_code < 500:
             _err_body = getattr(api_error, "body", None)
-            _err_body_str = str(_err_body)[:300] if _err_body else None
+            _err_body_str = _project_error_detail(agent, str(_err_body), limit=300) if _err_body else None
             if _err_body_str:
                 _blines(agent, f"   📋 Details: {_err_body_str}")
         _blines(agent, f"   ⏱️  Elapsed: {elapsed_time:.2f}s  Context: {len(api_messages)} msgs, ~{approx_tokens:,} tokens")
@@ -1508,7 +1521,7 @@ def compute_error_backoff(
     logger.warning(
         "Retrying API call in %ss (attempt %s/%s) %s policy=%s error=%s",
         wait_time, retry_count, max_retries, agent._client_log_context(),
-        _backoff_policy or "default", api_error,
+        _backoff_policy or "default", _project_error_detail(agent, str(api_error)),
     )
     return wait_time
 

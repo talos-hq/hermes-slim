@@ -19,7 +19,8 @@ def cmd_sessions_lazy(args, **kwargs):
     return cmd_sessions(args, **kwargs)
 
 
-def _add_rename_and_discard(sessions_subparsers) -> None:
+def _add_session_management_commands(sessions_subparsers) -> None:
+    sessions_subparsers.add_parser("create-protected", help="Create a session with a protected transcript")
     sessions_rename = sessions_subparsers.add_parser(
         "rename", help="Set or change a session's title")
     sessions_rename.add_argument("session_id", help="Session ID to rename")
@@ -294,7 +295,7 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
         "--report", type=Path, help="JSON report path (defaults to <output>.recovery.json)")
 
     sessions_subparsers.add_parser("stats", help="Show session store statistics")
-    _add_rename_and_discard(sessions_subparsers)
+    _add_session_management_commands(sessions_subparsers)
 
     sessions_pin = sessions_subparsers.add_parser(
         "pin", help="Pin session(s) — durable keep flag, exempt from auto-archive",

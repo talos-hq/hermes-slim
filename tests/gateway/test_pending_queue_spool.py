@@ -8,6 +8,7 @@ successful transcript flush — not silently discarded (#78182, #82616).
 """
 import json
 import logging
+import asyncio
 import threading
 import time
 
@@ -225,3 +226,240 @@ class TestSpoolPrimitives:
         assert remaining == 0
         assert seen == ["c0", "c1", "c2"]
         assert _spool_files(spool_home) == []
+
+
+def test_failed_diversion_keeps_only_unwritten_records(monkeypatch):
+    from hermes_state_errors import StateDbReplacedError
+
+    store = _make_store(None)
+    saved = {"role": "user", "content": "already spooled"}
+    unsaved = {"role": "assistant", "content": "needs a retry"}
+    concurrent = {"role": "user", "content": "arrived during diversion"}
+    store._dirty_transcripts["queue"] = [saved, unsaved]
+
+    def spool(_session_id, message):
+        return "spooled.json" if message is saved else None
+
+    def divert(_session_id, messages):
+        assert messages == [saved, unsaved]
+        store._dirty_transcripts["queue"] = [concurrent]
+        raise OSError("fixture write failure")
+
+    monkeypatch.setattr("gateway.session_transcript._spool_dropped", spool)
+    monkeypatch.setattr("hermes_state.divert_session_transcript_jsonl", divert)
+    store._divert_transcript_after_db_replaced("saved", "queue", StateDbReplacedError("fixture"))
+    assert store._dirty_transcripts["queue"] == [unsaved, concurrent]
+
+
+def test_transcript_spool_retry_after_interrupted_cleanup(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from gateway import shutdown_flush
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    db_path = spool_home / "state.db"
+    monkeypatch.setattr("hermes_state._default_db_path", lambda: db_path)
+    address = "retry-spool@example.org"
+    with SessionDB(db_path=db_path) as db:
+        db.create_protected_session("fixture", "test")
+        path = shutdown_flush.spool_dropped_transcript_message("fixture", {"role": "user", "content": address})
+        assert path is not None
+        with monkeypatch.context() as interrupt:
+            def stop_after_commit(*_args):
+                raise KeyboardInterrupt
+
+            interrupt.setattr(shutdown_flush, "_remove_replayed", stop_after_commit)
+            with pytest.raises(KeyboardInterrupt):
+                shutdown_flush.recover_pending_spool(db)
+        assert path.exists()
+    with SessionDB(db_path=db_path) as db:
+        store = _make_store(db)
+        store.mark_spooled_drop_sessions({"fixture"})
+        assert store._drain_spooled_drops("fixture") is None
+        rows = db.get_messages_as_conversation("fixture")
+        assert len(rows) == 1
+        assert "[[CONVO_SAFE:" in rows[0]["content"]
+        assert not path.exists()
+    assert address.encode() not in db_path.read_bytes()
+
+
+def test_shutdown_pending_and_overflow_bind_redacted_text_to_original_session(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from agent.protected_request import session_request_keybox
+    from gateway.shutdown_flush import flush_overflow_to_file, flush_pending_to_file, recover_pending_spool
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    addresses = ("pending-fixture@example.org", "overflow-fixture@example.org")
+    with SessionDB(db_path=spool_home / "state.db") as db:
+        db.create_protected_session("original", "test")
+        db.create_session("other", "test")
+        route = "agent:main:telegram:fixture"
+
+        def lookup(_route, **_kwargs):
+            return "original", db
+
+        assert flush_pending_to_file({route: addresses[0]}, session_resolver=lookup) == 1
+        assert flush_overflow_to_file({route: [addresses[1]]}, session_resolver=lookup) == 1
+        for path in _spool_files(spool_home):
+            contents = path.read_bytes()
+            assert b"[[CONVO_SAFE:" in contents
+            assert all(address.encode() not in contents for address in addresses)
+        assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: ("other", db))[0] == 0
+        assert len(_spool_files(spool_home)) == 2
+        assert recover_pending_spool(db, session_resolver=lookup)[0] == 2
+        rows = db.get_messages_as_conversation("original")
+        box = session_request_keybox(db, "original")
+        assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == addresses
+
+
+def test_shutdown_drain_does_not_acknowledge_volatile_protected_input(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from types import SimpleNamespace
+    from gateway.run_busy import GatewayBusySessionMixin
+    from gateway.run_inbound import GatewayInboundMixin
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    replies, queue = [], []
+
+    async def reply(_event, _adapter, message):
+        replies.append(message)
+
+    with SessionDB(db_path=spool_home / "state.db") as db:
+        db.create_protected_session("protected", "test")
+        db.create_session("plain", "test")
+        runner = SimpleNamespace(
+            session_store=SimpleNamespace(resolve_session_id_for_key=lambda key: (key, db)),
+            _delivery_adapter_for=lambda _source: object(),
+            _queue_during_drain_enabled=lambda _mode: True,
+            _queue_or_replace_pending_event=lambda key, _event: queue.append(key),
+            _status_action_gerund=lambda: "stopping",
+            _send_busy_reply=reply,
+            _command_turn_admitted=lambda *_a: False,
+            _enqueue_fifo=lambda key, *_a: queue.append(key),
+        )
+        for key in ("protected", "plain"):
+            asyncio.run(GatewayBusySessionMixin._send_busy_drain_notice(
+                runner, SimpleNamespace(source=None), key, "queue",
+            ))
+        for key, expected in (("protected", True), ("plain", False)):
+            assert asyncio.run(GatewayBusySessionMixin._queue_command_turn(
+                runner, key, object(), object(), object(), ack="queued",
+            )) is expected
+        protected_followup = SimpleNamespace(internal=False, get_command=lambda: None)
+        response = asyncio.run(GatewayInboundMixin._hm_handle_running_session_message(
+            runner, protected_followup, None, "protected",
+        ))
+        assert "unavailable" in response.lower()
+    assert queue == ["plain", "plain"]
+    assert "queued" not in replies[0].lower()
+    assert "queued" in replies[1].lower()
+    assert "unavailable" in replies[2].lower()
+
+
+def test_protected_internal_wake_requires_durable_admission(monkeypatch):
+    from types import SimpleNamespace
+    from gateway.platforms.event import MessageType
+    from gateway.run_busy import GatewayBusySessionMixin
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "00" * 32)
+    admitted = []
+
+    async def admit(_runner, _adapter, _source, text, _producer, metadata):
+        admitted.append((text, metadata))
+        return text == "accepted"
+
+    monkeypatch.setattr("gateway.session_automation.admit_route_wake", admit)
+    runner = SimpleNamespace(_delivery_adapter_for=lambda _source: object())
+    for text, trusted, accepted in (("accepted", True, True), ("refused", True, False), ("untrusted", False, False)):
+        event = SimpleNamespace(
+            source=None, text=text, message_type=MessageType.TEXT, metadata={"fixture": True},
+            allow_gateway_control=trusted, _gateway_accepted=False,
+        )
+        assert asyncio.run(GatewayBusySessionMixin._handle_protected_busy_wake(runner, event, "route"))
+        assert event._gateway_accepted is accepted
+    assert admitted == [("accepted", {"fixture": True}), ("refused", {"fixture": True})]
+
+
+def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
+    pytest.importorskip("convo_safe.replay")
+    from agent.secret_scope import reset_multiplex_context, set_multiplex_context
+    from gateway.run import _profile_runtime_scope
+    from gateway.shutdown_sealed_spool import seal_pending
+    from gateway.shutdown_flush import flush_overflow_to_file, flush_pending_to_file, recover_pending_spool
+    from hermes_state import SessionDB
+
+    monkeypatch.setenv("HERMES_CONVO_SAFE_MASTER_KEY", "11" * 32)
+    named = spool_home / "profiles" / "named"
+    named.mkdir(parents=True)
+    (named / ".env").write_text(f"HERMES_CONVO_SAFE_MASTER_KEY={'22' * 32}\n")
+    address = "named-shutdown@example.org"
+    route = "agent:named:telegram:fixture"
+    token = set_multiplex_context(True)
+    try:
+        with SessionDB(db_path=named / "state.db") as db:
+            with _profile_runtime_scope(named):
+                db.create_protected_session("original", "test")
+            def resolver(*_a, **_kw):
+                return "original", db
+            assert flush_pending_to_file({route: address}, session_resolver=resolver) == 1
+            (spool,) = _spool_files(spool_home)
+            resolved_record = spool.read_bytes()
+            assert address.encode() not in resolved_record
+            held = "unresolved-shutdown@example.org"
+            later = "later-shutdown@example.org"
+            assert flush_overflow_to_file({route: [held, later]}, session_resolver=lambda *_a, **_kw: None,
+                                         profile_resolver=lambda _key: named) == 2
+            sealed = [item for item in _spool_files(spool_home) if item != spool]
+            assert len(sealed) == 2
+            assert all(b"sealed_v1" in item.read_bytes() and held.encode() not in item.read_bytes() for item in sealed)
+            assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: None)[0] == 0
+            assert len(_spool_files(spool_home)) == 3
+            other = spool_home / "profiles" / "other"
+            other.mkdir()
+            (other / ".env").write_text(f"HERMES_CONVO_SAFE_MASTER_KEY={'22' * 32}\n")
+            resolved_spool = spool.with_suffix(".held")
+            spool.rename(resolved_spool)
+            with SessionDB(db_path=other / "state.db") as other_db:
+                with _profile_runtime_scope(other):
+                    other_db.create_protected_session("original", "test")
+                    seal_pending({"text": "different profile"}, {"session_key": route})
+                assert recover_pending_spool(db, session_resolver=lambda *_a, **_kw: ("original", other_db))[0] == 0
+            resolved_spool.rename(spool)
+            assert len(_spool_files(spool_home)) == 3
+            first = next(item for item in sealed if json.loads(item.read_bytes())["seq"] == 0)
+            original = first.read_bytes()
+            changed = json.loads(original)
+            changed["data"]["sealed_v1"] = "AAAA"
+            first.write_text(json.dumps(changed))
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            assert len(_spool_files(spool_home)) == 3
+            changed = json.loads(original)
+            changed["seq"] = 999
+            first.write_text(json.dumps(changed))
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            changed = json.loads(original)
+            changed["session_key"] = "untrusted-route"
+            first.write_text(json.dumps(changed))
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            first.write_text("invalid JSON")
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
+            first.write_bytes(original)
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 3
+            first.write_bytes(original)  # crash after commit and before the spool unlink
+            duplicate = first.with_name("pending-sealed-duplicate.json")
+            duplicate.write_bytes(original)
+            spool.write_bytes(resolved_record)
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 3
+            assert not _spool_files(spool_home)
+            with _profile_runtime_scope(named):
+                from agent.protected_request import session_request_keybox
+
+                box = session_request_keybox(db, "original")
+                rows = db.get_messages_as_conversation("original")
+                assert tuple(box.restore_strict(box.replay_session, row["content"], 1024) for row in rows) == (
+                    address, held, later,
+                )
+    finally:
+        reset_multiplex_context(token)

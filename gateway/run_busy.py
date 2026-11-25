@@ -629,7 +629,11 @@ class GatewayBusySessionMixin:
         adapter = self._delivery_adapter_for(event.source)
         if not adapter:
             return
-        if self._queue_during_drain_enabled(effective_mode):
+        from gateway.session_ingress import allows_volatile_busy_queue
+
+        if self._queue_during_drain_enabled(effective_mode) and await asyncio.to_thread(
+            allows_volatile_busy_queue, getattr(self, "session_store", None), session_key,
+        ):
             self._queue_or_replace_pending_event(session_key, event)
             message = t("gateway.busy.drain_queued", action=self._status_action_gerund())
         else:
@@ -927,7 +931,29 @@ class GatewayBusySessionMixin:
         except Exception as e:
             logger.debug("Failed to send busy-ack: %s", e)
 
+    async def _handle_protected_busy_wake(self, event: MessageEvent, session_key: str) -> bool:
+        from gateway.session_ingress import allows_volatile_busy_queue
+
+        if await asyncio.to_thread(allows_volatile_busy_queue, getattr(self, "session_store", None), session_key):
+            return False
+        from gateway.session_automation import admit_route_wake
+        from hermes_state_runtime import RuntimeStoreError
+
+        adapter = self._delivery_adapter_for(event.source)
+        if adapter is not None and event.allow_gateway_control and event.message_type == MessageType.TEXT:
+            try:
+                if await admit_route_wake(self, adapter, event.source, event.text, "protected-busy-wake", event.metadata):
+                    event._gateway_accepted = True
+                    return True
+            except RuntimeStoreError:
+                logger.warning("Durable admission refused a protected gateway wake")
+                return True
+        logger.warning("Protected gateway wake could not be admitted durably")
+        return True
+
     async def _handle_active_session_busy_message(self, event: MessageEvent, session_key: str) -> bool:
+        if event.internal and await self._handle_protected_busy_wake(event, session_key):
+            return True
         # Gateway wakes have no external user identity. Admit them before auth/drain/approval
         # handling, without merging their text into an already queued human message.
         if event.internal and event.allow_gateway_control:
@@ -987,6 +1013,11 @@ class GatewayBusySessionMixin:
         # Queue as the next turn — skipped after a successful steer/redirect (the text is already in
         # the run and must NOT replay). FIFO gives each text its own turn (raw merge would join them).
         if not _steer.steered and not _steer.redirected:
+            from gateway.session_ingress import PROTECTED_QUEUE_UNAVAILABLE, allows_volatile_busy_queue
+
+            if not await asyncio.to_thread(allows_volatile_busy_queue, getattr(self, "session_store", None), session_key):
+                await self._send_busy_reply(event, adapter, PROTECTED_QUEUE_UNAVAILABLE)
+                return True
             self._queue_or_replace_pending_event(session_key, event)
         # Store the message so it's processed as the next turn after the current run finishes (or is
         # interrupted). Skip this for a successful steer — the text already landed inside the run and must
@@ -1305,6 +1336,11 @@ class GatewayBusySessionMixin:
         on the transport's earlier release or a refusal. False: the in-process slot (no authority),
         and the caller answers with ``ack`` itself."""
         if not self._command_turn_admitted(event, session_key):
+            from gateway.session_ingress import PROTECTED_QUEUE_UNAVAILABLE, allows_volatile_busy_queue
+
+            if not await asyncio.to_thread(allows_volatile_busy_queue, getattr(self, "session_store", None), session_key):
+                await self._send_busy_reply(command, adapter, PROTECTED_QUEUE_UNAVAILABLE)
+                return True
             self._enqueue_fifo(session_key, event, adapter)
             return False
         from gateway.session_ingress import dispatch_shared_busy
