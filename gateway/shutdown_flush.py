@@ -145,6 +145,27 @@ def flush_overflow_to_file(overflow_by_session: dict[str, Any], *, reason: str =
     return flushed
 
 
+def flush_runner_pending(runner) -> None:
+    """Save the pending head and overflow tail before clearing live state."""
+    from contextlib import suppress
+
+    store = getattr(runner, "session_store", None)
+    resolver = getattr(store, "resolve_session_id_for_key", None)
+    with suppress(Exception):
+        flush_pending_to_file(dict(runner._pending_messages), session_resolver=resolver)
+    with suppress(Exception):
+        overflow = getattr(runner, "_queued_events", None) or {}
+        flush_overflow_to_file({key: list(events) for key, events in dict(overflow).items() if events},
+                               session_resolver=resolver)
+
+
+def flush_adapter_pending(adapter) -> None:
+    """Save an adapter's pending messages using its own routing store."""
+    store = getattr(adapter, "_session_store", None)
+    flush_pending_to_file(adapter._pending_messages, reason="adapter_shutdown",
+                          session_resolver=getattr(store, "resolve_session_id_for_key", None))
+
+
 def spool_dropped_transcript_message(session_id: str, message: dict[str, Any]) -> Optional[Path]:
     """Spool a cap-evicted transcript message; ``None`` on failure (callers degrade to drop+log).
 
@@ -456,8 +477,11 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
             resolved = None
         if resolved and resolved[1] is not None:
             session_id, target_db = resolved
-    if replay_session and replay_session != session_id:
-        return False
+    if replay_session:
+        from agent.protected_request import session_request_keybox
+
+        if replay_session != session_id or session_request_keybox(target_db, session_id) is None:
+            return False
     if not session_id:
         logger.warning("Cannot recover pending message for %s: no session_id in flush file and "
                        "session_key-to-id resolution failed. "

@@ -4693,10 +4693,8 @@ class BasePlatformAdapter(ABC):
                                self.name, sum(not t.done() for t in tasks))
                 break
         with contextlib.suppress(Exception):  # flush pending messages to disk before clearing
-            from gateway.shutdown_flush import flush_pending_to_file
-            store = getattr(self, "_session_store", None)
-            flush_pending_to_file(self._pending_messages, reason="adapter_shutdown",
-                                  session_resolver=getattr(store, "resolve_session_id_for_key", None))
+            from gateway.shutdown_flush import flush_adapter_pending
+            flush_adapter_pending(self)
         for state in self._text_debounce_store().values():
             state.cancel_timer()
         for bucket in (self._background_tasks, self._expected_cancelled_tasks, self._session_tasks,
