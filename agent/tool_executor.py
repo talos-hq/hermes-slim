@@ -716,6 +716,13 @@ def _dispatch_authorized_once(
         block_message, ref.args = resolve() if authorization_gate is None else authorization_gate.run(resolve)
         state.args = ref.args
     block_body = None if block_message is None else {"error": block_message}
+    # A rewrite can introduce a protected value after the model response was checked.
+    from agent.protected_request import protected_tool_arguments
+    ref.args, requires_restore = protected_tool_arguments(agent, ref.args)
+    state.args = ref.args
+    if requires_restore:
+        block_body = {"error": "Protected tool arguments require trusted local restoration"}
+        block_error_type = "protected_tool_arguments"
 
     # Checked once, after plugin modify hooks (which may replace arguments) and
     # before guardrails or real dispatch: a copied compression marker in an
@@ -778,16 +785,21 @@ def _run_agent_tool_execution_middleware(
 ) -> _ManagedToolResult:
     """Run Relay rewrites before Hermes policy and dispatch exactly once."""
     from agent import relay_tools
+    from agent.protected_request import protected_tool_arguments
     from hermes_cli.middleware import (
         apply_tool_request_middleware,
         run_tool_execution_middleware,
     )
 
+    function_args, requires_restore = protected_tool_arguments(agent, function_args)
+    if requires_restore:
+        scope_block = "Protected tool arguments require trusted local restoration"
     trace = middleware_trace if middleware_trace is not None else []
     state = _ManagedToolResult(result=None, args=function_args, middleware_trace=trace, blocked=False, dispatched=False)
     dispatch_lock = threading.Lock()
 
     def _authorized_dispatch(final_args: dict[str, Any]) -> Any:
+        final_args, needs_restore = protected_tool_arguments(agent, final_args)
         with dispatch_lock:
             if state.dispatched:
                 raise RuntimeError("Hermes tool execution callback invoked more than once")
@@ -799,7 +811,7 @@ def _run_agent_tool_execution_middleware(
             state,
             _ToolCallRef(function_name, final_args, effective_task_id, tool_call_id, trace),
             execute=execute,
-            scope_block=scope_block,
+            scope_block="Protected tool arguments require trusted local restoration" if needs_restore else scope_block,
             display_index=display_index,
             begin_execution=begin_execution,
             authorization_gate=authorization_gate,
@@ -809,6 +821,11 @@ def _run_agent_tool_execution_middleware(
     _authorized_dispatch = bind_prepared_dispatch(_authorized_dispatch)
 
     def _hermes_pipeline(relay_args: dict[str, Any]) -> Any:
+        nonlocal scope_block
+        relay_args, needs_restore = protected_tool_arguments(agent, relay_args)
+        if needs_restore:
+            scope_block = "Protected tool arguments require trusted local restoration"
+            return _authorized_dispatch(relay_args)
         request_result = apply_tool_request_middleware(
             function_name,
             relay_args,
@@ -817,6 +834,10 @@ def _run_agent_tool_execution_middleware(
             **tool_hook_ids(agent, effective_task_id, tool_call_id),
         )
         request_args = request_result.payload if isinstance(request_result.payload, dict) else relay_args
+        request_args, requires_restore = protected_tool_arguments(agent, request_args)
+        if requires_restore:
+            scope_block = "Protected tool arguments require trusted local restoration"
+            return _authorized_dispatch(request_args)
         trace.clear()
         trace.extend(request_result.trace)
         return run_tool_execution_middleware(

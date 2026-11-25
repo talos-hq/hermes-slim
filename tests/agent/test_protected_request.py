@@ -164,3 +164,17 @@ def test_tool_result_projects_escaped_json_before_observation(monkeypatch):
     assert protected_request.project_tool_result(None, '{"output":"ordinary","count":2}') == (
         '{"output":"ordinary","count":2}'
     )
+
+
+def test_tool_argument_guard_detects_sensitive_values_and_existing_markers(monkeypatch):
+    from agent import protected_request
+
+    monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: Projector())
+    raw = {"nested": {"recipient": "fixture@example.org"}}
+    safe, requires_restore = protected_request.protected_tool_arguments(None, raw)
+    assert requires_restore and safe == {"nested": {"recipient": "[email-marker]"}}
+    assert raw["nested"]["recipient"] == "fixture@example.org"
+    marker = {"recipient": "[[CONVO_SAFE:v1:{fixture}]]"}
+    assert protected_request.protected_tool_arguments(None, marker) == (marker, True)
+    benign = {"recipient": "ordinary"}
+    assert protected_request.protected_tool_arguments(None, benign) == (benign, False)
