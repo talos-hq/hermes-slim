@@ -24,7 +24,7 @@ from hermes_state_common import (
     _json_or, _legacy_reset_child_sql, _placeholders, _sql_json_extract)
 from hermes_state_compaction_display import later_tool_copy_ids, not_a_later_tool_copy_sql
 from hermes_state_detached_results import SessionDetachedResultsMixin
-from hermes_state_replay import project_transcript_row, transcript_write_keybox
+from hermes_state_replay import project_transcript_row, transcript_write_keybox, write_user_message_content
 from hermes_state_todo import SessionTodoResultMixin
 from hermes_state_identity import (
     _absorbed_uids_json, _restore_identity_columns, _stable_tool_key, _tool_call_uid_map, _tool_call_uid_or_none, _tool_call_uids_json, _uid_list)
@@ -1055,25 +1055,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
 
     def set_user_message_content(self, session_id: str, row_id: int, content: Any,
                                  display_metadata: Optional[dict[str, Any]] = None) -> int:
-        """Rewrite the content of ONE known active user row. Used when a user turn was written at submit
-        time (before the agent ran) and the turn prologue then rewrote the prompt it persists (@-file
-        expansion, native image parts, a ``pre_llm_call`` veto's placeholder): the early row must show what
-        the transcript will replay, not the raw keystrokes, and the turn must not append a second row for
-        the same input. ``display_metadata``, when given, replaces the row's (and clears ``api_content``)."""
-        if not session_id or isinstance(row_id, bool) or not isinstance(row_id, int) or row_id <= 0:
-            return 0
-
-        def _do(conn):
-            box = transcript_write_keybox(self.db_path, conn, session_id)
-            safe, _ = project_transcript_row(box, {"content": content, "display_metadata": display_metadata}, None)
-            encoded = self._encode_content(safe["content"])
-            where = "WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1"
-            if display_metadata is None:
-                return conn.execute(f"UPDATE messages SET content = ? {where}", (encoded, row_id, session_id)).rowcount
-            return conn.execute(f"UPDATE messages SET content = ?, api_content = NULL, display_metadata = ? {where}",
-                (encoded, self._encode_display_metadata(safe["display_metadata"]), row_id, session_id)).rowcount
-
-        return self._execute_write(_do)
+        return write_user_message_content(self, session_id, row_id, content, display_metadata)
 
     def deactivate_message(self, session_id: str, row_id: int) -> int:
         """Deactivate ONE known row (id-addressed, idempotent; returns the affected row count). Used by

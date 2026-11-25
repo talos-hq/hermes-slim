@@ -118,3 +118,25 @@ def project_transcript_row(keybox, message, tool_calls):
         return projected, _project_calls(keybox, tool_calls)
     except (ValueError, RuntimeError):
         raise ProtectedReplayError("Protected transcript could not be projected") from None
+
+
+def write_user_message_content(db, session_id, row_id, content, display_metadata):
+    """Rewrite the content of ONE known active user row. Used when a user turn was written at submit
+    time (before the agent ran) and the turn prologue then rewrote the prompt it persists (@-file
+    expansion, native image parts, a ``pre_llm_call`` veto's placeholder): the early row must show what
+    the transcript will replay, not the raw keystrokes, and the turn must not append a second row for
+    the same input. ``display_metadata``, when given, replaces the row's (and clears ``api_content``)."""
+    if not session_id or isinstance(row_id, bool) or not isinstance(row_id, int) or row_id <= 0:
+        return 0
+
+    def _do(conn):
+        box = transcript_write_keybox(db.db_path, conn, session_id)
+        safe, _ = project_transcript_row(box, {"content": content, "display_metadata": display_metadata}, None)
+        encoded = db._encode_content(safe["content"])
+        where = "WHERE id = ? AND session_id = ? AND role = 'user' AND active = 1"
+        if display_metadata is None:
+            return conn.execute(f"UPDATE messages SET content = ? {where}", (encoded, row_id, session_id)).rowcount
+        return conn.execute(f"UPDATE messages SET content = ?, api_content = NULL, display_metadata = ? {where}",
+            (encoded, db._encode_display_metadata(safe["display_metadata"]), row_id, session_id)).rowcount
+
+    return db._execute_write(_do)
