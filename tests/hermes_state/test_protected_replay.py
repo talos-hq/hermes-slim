@@ -106,3 +106,24 @@ def test_unavailable_sidecar_prevents_protected_write(tmp_path, monkeypatch):
         with pytest.raises(ProtectedReplayError):
             db.append_message("saved", "user", content="private fixture")
         assert db.get_messages("saved") == []
+
+
+@pytest.mark.parametrize("key_configured", [True, False])
+def test_protected_transcript_fallbacks_do_not_write_plaintext(tmp_path, monkeypatch, key_configured):
+    from gateway.shutdown_flush import spool_dropped_transcript_message
+    from hermes_state import divert_session_transcript_jsonl
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_state.DEFAULT_DB_PATH", tmp_path / "state.db")
+    monkeypatch.setattr("hermes_cli.config.get_env_value", lambda _name: "fixture" if key_configured else None)
+    if not key_configured:
+        log = replay_log_path(tmp_path / "state.db", "saved")
+        log.parent.mkdir()
+        log.with_name(log.name + ".keybox.sqlite").touch()
+
+    record = {"role": "user", "content": "private fixture"}
+    with pytest.raises(ProtectedReplayError, match="requires a verified fallback"):
+        divert_session_transcript_jsonl("saved", [record])
+    assert spool_dropped_transcript_message("saved", record) is None
+    assert not (tmp_path / "sessions").exists()
+    assert not (tmp_path / "pending_messages").exists()
