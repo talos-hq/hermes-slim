@@ -61,3 +61,18 @@ def unseal_pending(data, payload):
     """Unseal only in the owning profile when the route can be resolved."""
     encrypted = base64.b64decode(data["sealed_v1"], validate=True)
     return json.loads(_cipher().decrypt(encrypted[:12], encrypted[12:], _context(payload)))
+
+
+def append_sealed_pending(db, session_id, data, payload, text):
+    """Commit the replay receipt and its redacted message atomically."""
+    encrypted = base64.b64decode(data["sealed_v1"], validate=True)
+    receipt = "gateway.sealed_spool.v1." + hashlib.sha256(encrypted).hexdigest()
+    messages = [{"role": "user", "content": text, "timestamp": payload.get("ts")}]
+
+    def write(conn):
+        if conn.execute("SELECT 1 FROM state_meta WHERE key=?", (receipt,)).fetchone():
+            return
+        db._append_messages_in_transaction(conn, session_id, messages)
+        conn.execute("INSERT INTO state_meta(key,value) VALUES (?,?)", (receipt, session_id))
+
+    db._execute_transcript_write(write, messages, patience_s=db._TRANSCRIPT_WRITE_PATIENCE_S)

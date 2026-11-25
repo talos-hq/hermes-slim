@@ -591,13 +591,15 @@ def _recover_one_payload(session_db, path: Path, payload: dict[str, Any], *,
                     or session_request_keybox(target_db, session_id) is None):
                 return False
         if sealed:
-            from gateway.shutdown_sealed_spool import unseal_pending
+            from gateway.shutdown_sealed_spool import append_sealed_pending, unseal_pending
 
             text = unseal_pending(data, payload).get("text", "")
             if not text:
                 return False
-        target_db.append_message(session_id=session_id, role="user", content=text,
-                                 timestamp=payload.get("ts", int(time.time())))
+            append_sealed_pending(target_db, session_id, data, payload, text)
+        else:
+            target_db.append_message(session_id=session_id, role="user", content=text,
+                                     timestamp=payload.get("ts", int(time.time())))
     return True
 
 

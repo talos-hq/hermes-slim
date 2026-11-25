@@ -414,6 +414,11 @@ def test_shutdown_uses_resolved_mux_profile_key(spool_home, monkeypatch):
             assert recover_pending_spool(db, session_resolver=resolver)[0] == 0
             first.write_bytes(original)
             assert recover_pending_spool(db, session_resolver=resolver)[0] == 3
+            first.write_bytes(original)  # crash after commit and before the spool unlink
+            duplicate = first.with_name("pending-sealed-duplicate.json")
+            duplicate.write_bytes(original)
+            assert recover_pending_spool(db, session_resolver=resolver)[0] == 2
+            assert not _spool_files(spool_home)
             with _profile_runtime_scope(named):
                 from agent.protected_request import session_request_keybox
 
