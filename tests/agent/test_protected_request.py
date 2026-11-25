@@ -178,3 +178,23 @@ def test_tool_argument_guard_detects_sensitive_values_and_existing_markers(monke
     assert protected_request.protected_tool_arguments(None, marker) == (marker, True)
     benign = {"recipient": "ordinary"}
     assert protected_request.protected_tool_arguments(None, benign) == (benign, False)
+
+
+def test_trajectory_projects_input_and_rendered_export(monkeypatch):
+    from agent import protected_request
+    from agent.session_persistence import SessionPersistenceMixin
+
+    monkeypatch.setattr(protected_request, "request_keybox", lambda _agent: Projector())
+    exported = []
+    monkeypatch.setattr("agent.session_persistence._save_trajectory_to_file", lambda rows, *_: exported.extend(rows))
+
+    def render(history, query, _completed):
+        assert history[0]["content"] == "[email-marker]"
+        assert query == "[email-marker]"
+        return [{"from": "system", "value": "rendered fixture@example.org"}]
+
+    agent = SimpleNamespace(save_trajectories=True, model="fixture", _convert_to_trajectory_format=render)
+    SessionPersistenceMixin._save_trajectory(
+        agent, [{"role": "user", "content": "fixture@example.org"}], "fixture@example.org", True,
+    )
+    assert exported == [{"from": "system", "value": "rendered [email-marker]"}]
