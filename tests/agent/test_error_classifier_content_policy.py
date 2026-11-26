@@ -3,6 +3,9 @@
 import pytest
 
 from agent.error_classifier import FailoverReason, classify_api_error
+from agent.turn_api_request import withhold_replayed_tool_arguments
+from agent.turn_recovery import recover_after_classification
+from agent.turn_retry_state import TurnRetryState
 
 
 class _APIError(Exception):
@@ -37,3 +40,99 @@ def test_openrouter_sensitive_info_guardrail_stops_without_fallback():
     assert result.reason == FailoverReason.content_policy_blocked
     assert result.retryable is False
     assert result.should_fallback is False
+
+
+def test_openrouter_guardrail_retries_without_replaying_tool_argument_values():
+    error = _APIError(
+        "Request blocked by content filter: Content filter redaction would produce invalid tool call arguments",
+        403,
+    )
+    refusal = classify_api_error(error, provider="openrouter")
+    retry = TurnRetryState()
+    assistant = {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": "probe", "type": "function",
+             "function": {"name": "check", "arguments": '{"identifier":2025550100}'}},
+        ],
+    }
+    tool_result = {"role": "tool", "tool_call_id": "probe", "content": "Check complete."}
+    user = {"role": "user", "content": "Continue."}
+    history = [assistant, tool_result, user]
+    retry_now, rotated = recover_after_classification(
+        None, error, refusal, retry, status_code=403, error_context={},
+        messages=history, api_messages=history,
+    )
+
+    assert retry_now and not rotated
+    assert retry.openrouter_tool_arguments_withheld
+    replay = withhold_replayed_tool_arguments(history)
+    assert replay[0]["tool_calls"] == [
+        {"id": "probe", "type": "function", "function": {"name": "check", "arguments": "{}"}},
+    ]
+    assert replay[1:] == [tool_result, user]
+    assert history[0]["tool_calls"][0]["function"]["arguments"] == '{"identifier":2025550100}'
+    assert withhold_replayed_tool_arguments(replay) is replay
+
+
+def test_openrouter_guardrail_projection_survives_another_tool_round(monkeypatch):
+    from types import SimpleNamespace
+
+    from openai.types.chat import ChatCompletion
+
+    from run_agent import AIAgent
+
+    calls = []
+    captured = '{"identifier":2025550100}'
+    guardrail_error = _APIError(
+        "Request blocked by content filter: Content filter redaction would produce invalid tool call arguments",
+        403,
+    )
+
+    def create(**kwargs):
+        arguments = {
+            tc["id"]: tc["function"]["arguments"]
+            for message in kwargs["messages"]
+            for tc in message.get("tool_calls", [])
+        }
+        calls.append(arguments)
+        if arguments.get("historical") == captured:
+            raise guardrail_error
+        message = {"role": "assistant", "content": "Done"}
+        finish = "stop"
+        if len(calls) == 2:
+            message = {
+                "role": "assistant", "content": None, "tool_calls": [
+                    {"id": "next", "type": "function",
+                     "function": {"name": "unavailable_probe", "arguments": '{"identifier":17}'}},
+                ],
+            }
+            finish = "tool_calls"
+        return ChatCompletion(
+            id="guardrail-probe", object="chat.completion", model="test-model", created=1,
+            choices=[{"index": 0, "message": message, "finish_reason": finish}],
+        )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr("agent.process_bootstrap.OpenAI", lambda **kwargs: client)
+    monkeypatch.setattr("model_tools.get_tool_definitions", lambda *a, **k: [])
+    agent = AIAgent(
+        model="test-model", api_key="test-key", provider="openrouter",
+        base_url="https://openrouter.ai/api/v1", max_iterations=4,
+        quiet_mode=True, skip_memory=True, skip_context_files=True,
+    )
+    agent._disable_streaming = True
+    history = [
+        {"role": "user", "content": "Check the identifier."},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "historical", "type": "function",
+             "function": {"name": "check", "arguments": captured}},
+        ]},
+        {"role": "tool", "tool_call_id": "historical", "content": "Check complete."},
+    ]
+
+    result = agent.run_conversation("Continue.", conversation_history=history)
+
+    assert result["completed"]
+    assert calls == [{"historical": captured}, {"historical": "{}"}, {"historical": "{}", "next": "{}"}]
+    assert history[1]["tool_calls"][0]["function"]["arguments"] == captured

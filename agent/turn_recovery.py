@@ -661,6 +661,15 @@ def recover_after_classification(
     Returns ``(retry_now, recovered_with_pool)``; the latter feeds the Nous rate-limit guard."""
     from agent.conversation_loop import _is_nous_inference_route
 
+    if (getattr(classified, "error_context", None) or {}).get("guardrail_rejected_tool_arguments"):
+        from agent.turn_api_request import withhold_replayed_tool_arguments
+
+        if (not _retry.openrouter_tool_arguments_withheld
+                and withhold_replayed_tool_arguments(api_messages) is not api_messages):
+            _retry.openrouter_tool_arguments_withheld = True
+            logger.info("Retrying OpenRouter request with historical tool arguments withheld")
+            return True, False
+
     # The credit-limited 402 clamp runs before pool rotation, which would bench a credential
     # that still has credit. A ``reasoning.context`` 400 is classified reasoning_mandatory, whose rung
     # would drop the whole reasoning config; omit only the all_turns opt-in, ahead of it.

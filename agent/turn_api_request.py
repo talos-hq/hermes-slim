@@ -186,15 +186,48 @@ def build_request_payload(
     )
 
 
+def withhold_replayed_tool_arguments(messages):
+    """Keep tool-result pairing while omitting argument values from the wire copy."""
+    projected = []
+    changed = False
+    for message in messages:
+        calls = message.get("tool_calls") if message.get("role") == "assistant" else None
+        if not isinstance(calls, list):
+            projected.append(message)
+            continue
+        safe_calls = []
+        withheld = False
+        for call in calls:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and function.get("arguments") not in (None, "", "{}"):
+                call = {**call, "function": {**function, "arguments": "{}"}}
+                withheld = True
+            safe_calls.append(call)
+        if not withheld:
+            projected.append(message)
+            continue
+        changed = True
+        safe_message = {**message, "tool_calls": safe_calls}
+        content = message.get("content")
+        if content is None or isinstance(content, str):
+            marker = "[Historical tool argument values withheld.]"
+            safe_message["content"] = f"{content}\n\n{marker}" if content else marker
+        projected.append(safe_message)
+    return projected if changed else messages
+
+
 def build_api_request(
     agent: Any, *, api_messages: Any, _moa_prepared_request: Any, tools_for_api: Any,
     system_message: Any, messages: Any, original_user_message: Any, approx_tokens: Any,
     total_chars: Any, retry_count: Any, api_call_count: Any, api_request_id: Any,
-    api_start_time: Any, effective_task_id: Any, turn_id: Any,
+    api_start_time: Any, effective_task_id: Any, turn_id: Any, _retry: Any = None,
 ) -> ApiRequestBuild:
     """Assemble the attempt's request in the original order (every mutation happens BEFORE
     middleware/hooks/debug dumps observe the payload)."""
     from agent.conversation_loop import _moa_client_consumes_prepared_request
+
+    if _retry and _retry.openrouter_tool_arguments_withheld and agent.provider == "openrouter":
+        api_messages = withhold_replayed_tool_arguments(api_messages)
 
     built = build_request_payload(
         agent, api_messages=api_messages, _moa_prepared_request=_moa_prepared_request,
