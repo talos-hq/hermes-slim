@@ -486,7 +486,18 @@ def nonretryable_copy(
     return f"{body}\n\nProvider said: {summary}"
 
 
-def content_policy_copy(*, label: str, summary: str) -> str:
+SENSITIVE_INFO_GUARDRAIL_NEXT_STEPS = (
+    "Start a fresh conversation with a request that omits sensitive values. "
+    "The filter also checks tool arguments already in the conversation."
+)
+
+
+def content_policy_copy(*, label: str, summary: str, sensitive_info_guardrail: bool = False) -> str:
+    if sensitive_info_guardrail:
+        return (
+            f"{label}'s Sensitive Info Guardrail blocked the request before it reached the model. "
+            f"{SENSITIVE_INFO_GUARDRAIL_NEXT_STEPS}\n\nProvider said: {summary}"
+        )
     return (
         f"{label}'s safety filter refused this request, so the model didn't answer. "
         f"{CONTENT_POLICY_NEXT_STEPS}\n\nProvider said: {summary}"
