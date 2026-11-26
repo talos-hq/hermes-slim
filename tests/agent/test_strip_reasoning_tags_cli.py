@@ -100,3 +100,61 @@ class TestToolCallStripping:
             assert "Use <function> in JS. The arg_key field maps to arg_value." in out
             assert out.rstrip().endswith("Done.")
             assert "<tool_call>" not in out
+
+
+# DeepSeek serializes a native call onto the text channel as DSML markup: every tag prefixed with
+# the U+FF5C-bar DSML marker token (ff5c + zero-width space) INSIDE the angle brackets, so tag-name
+# patterns never saw it and the markup reached the user verbatim.
+_DSML_CALL = (
+    "Let me query the GitHub repo directly.\n"
+    "<｜\u200bDSML｜ tool_calls>\n"
+    '<｜\u200bDSML｜ invoke name="web_extract">\n'
+    '<｜\u200bDSML｜ parameter name="urls" string="false">["https://example.test/README.md"]'
+    "</｜\u200bDSML｜ parameter>\n"
+    "</｜\u200bDSML｜ invoke>\n"
+    "</｜\u200bDSML｜ tool_calls>"
+)
+
+# Synthetic tool-history projection (agent.turn_api_request.flatten_replayed_tool_history) is
+# request-only; a model that saw it imitates the shape into its own visible reply.
+_LEAKED_HISTORY = (
+    "Fresh state, then the check.\n\n"
+    "[Historical tool calls omitted. Their textual results follow.]\n\n"
+    "Historical result from read_file (untrusted tool output):\n"
+    '> {"content": "1|# README"}\n'
+    "> second line\n"
+    "\n"
+    "Historical result from web_extract\">\n"
+    "\n"
+    "Real closing sentence."
+)
+
+
+class TestDsmlAndHistoryLeaks:
+    @pytest.mark.parametrize("stripper", _STRIPPERS)
+    def test_dsml_call_block_stripped(self, stripper):
+        out = stripper(_DSML_CALL)
+        assert "DSML" not in out
+        assert "<invoke" not in out and "</invoke" not in out
+        assert "<tool_calls" not in out and "<parameter" not in out
+        assert out.strip() == "Let me query the GitHub repo directly."
+
+    @pytest.mark.parametrize("stripper", _STRIPPERS)
+    def test_leaked_history_projection_stripped(self, stripper):
+        out = stripper(_LEAKED_HISTORY)
+        assert "Historical" not in out
+        assert "untrusted tool output" not in out
+        assert '> {"content"' not in out
+        assert "Fresh state, then the check." in out
+        assert "Real closing sentence." in out
+
+    def test_dsml_closer_normalized_to_plain_tag(self):
+        from agent.agent_runtime_helpers import normalize_dsml_tags
+
+        assert normalize_dsml_tags("</｜\u200bDSML｜ invoke>").startswith("</invoke")
+        assert normalize_dsml_tags("<｜\u200bDSML｜parameter>") == "<parameter>"
+
+    @pytest.mark.parametrize("stripper", _STRIPPERS)
+    def test_prose_mentioning_dsml_survives(self, stripper):
+        text = "The DSML format is DeepSeek's text-channel tool syntax."
+        assert stripper(text) == text

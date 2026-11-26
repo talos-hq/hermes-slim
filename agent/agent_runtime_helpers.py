@@ -39,9 +39,31 @@ from agent.primary_runtime_snapshot import _build_primary_runtime_snapshot
 from utils import base_url_host_matches, base_url_hostname, env_var_enabled
 logger = logging.getLogger(__name__)
 
-_TOOL_CALL_TAG_NAMES = ("tool_call", "tool_calls", "tool_result", "function_call", "function_calls")
+_TOOL_CALL_TAG_NAMES = (
+    "tool_call", "tool_calls", "tool_result", "function_call", "function_calls",
+    # Bare invoke/parameter/calls blocks: DeepSeek (and routes that proxy it) serialize a native
+    # call onto the text channel as <tool_calls><invoke><parameter/> blocks.
+    "invoke", "parameter", "calls",
+)
 # Optional XML namespace prefix: some models serialize native tool calls as <ns:function_calls>.
 _NS_PREFIX = r"(?:[\w.-]+:)?"
+# DeepSeek's DSML text-channel call syntax prefixes every tag with its marker token:
+#   <{marker}invoke name="x"><{marker}parameter name="y">v<{marker}/parameter></{marker}invoke>
+# The marker (an angle bracket char 0xFF5C plus a zero-width space) sits INSIDE the
+# the tag-name patterns above never match and the markup leaked to users verbatim. Normalize the
+# marker away first; the ordinary tag patterns then strip the block like any other leak.
+_DSML_TAG_PREFIX_PATTERN = re.compile(
+    r"<(\s*/)?\s*(?:\uff5c\ufe0f?\u200b?\s*DSML\ufe0f?\u200b?\s*\uff5c)+\s*", re.IGNORECASE
+)
+
+
+def normalize_dsml_tags(text: str) -> str:
+    """Rewrite a DSML-prefixed open/close tag (marker inside the angle brackets) as a plain tag."""
+    if not text or "DSML" not in text:
+        return text
+    return _DSML_TAG_PREFIX_PATTERN.sub(lambda m: "</" if m.group(1) else "<", text)
+
+
 _REASONING_BLOCK_PATTERNS = tuple(
     re.compile(rf"<{name}>.*?</{name}>", re.DOTALL | re.IGNORECASE) for name in THINK_TAG_NAMES
 )
@@ -64,6 +86,24 @@ _ORPHAN_REASONING_TAG_PATTERN = re.compile(
 )
 _STRAY_TOOL_CALL_CLOSER_PATTERN = re.compile(
     rf'</(?:{_NS_PREFIX}(?:{"|".join(_TOOL_CALL_TAG_NAMES)}|function))>\s*', re.IGNORECASE
+)
+# Synthetic tool-history projection (agent.turn_api_request.flatten_replayed_tool_history renders a
+# rejected OpenRouter tool round as plain text). It is REQUEST-ONLY, but a model that has seen it
+# imitates the shape and writes "<note> Historical result from terminal (untrusted tool output): > …"
+# into its own reply, which then reaches the user verbatim. Strip the markers from visible text.
+_HISTORICAL_HISTORY_NOTE_PATTERN = re.compile(
+    r"\[\s*Historical\s+(?:tool\s+)?calls?\s+omitted\.?[^\]\n]*\]\s*"
+    r"|\[\s*Historical\s+results?\s+follow\.?\s*\]\s*",
+    re.IGNORECASE,
+)
+_HISTORICAL_TOOL_RESULT_PATTERN = re.compile(
+    r"Historical result from [\w.:-]+[^\n]*(?:\n>[^\n]*)*\n?",
+    re.IGNORECASE,
+)
+# Catch-all for mangled imitations the two patterns above cannot parse (truncated, missing the
+# "(untrusted tool output)" tail, doubled notes). Line-start gated so ordinary prose survives.
+_HISTORICAL_STRAY_LINE_PATTERN = re.compile(
+    r"(?:^|\n)[ \t]*[\[(]?[ \t]*Historical[ \t]+(?:result|calls?|results?)[^\n]*", re.IGNORECASE
 )
 
 # An unclosed tool call is unrecoverable (#101899), so drop its remaining block.
@@ -841,6 +881,8 @@ _THINK_STRIP_PATTERNS = (
     *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS, _NAMED_FUNCTION_BLOCK_PATTERN,
     _UNTERMINATED_REASONING_BLOCK_PATTERN, _ORPHAN_REASONING_TAG_PATTERN,
     _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
+    _HISTORICAL_HISTORY_NOTE_PATTERN, _HISTORICAL_TOOL_RESULT_PATTERN,
+    _HISTORICAL_STRAY_LINE_PATTERN,
 )
 
 
@@ -850,6 +892,7 @@ def strip_think_blocks(agent, content: str) -> str:
     stray orphan tags (all case-insensitive variants), and standalone tool-call XML blocks some
     open models emit; ``<function>`` is boundary- and ``name=``-gated so prose mentions survive."""
     content = _flatten_content_text(content) if content else ""
+    content = normalize_dsml_tags(content)
     for pattern in _THINK_STRIP_PATTERNS if content else ():
         content = pattern.sub('', content)
     return content
