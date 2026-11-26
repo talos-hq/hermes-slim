@@ -186,34 +186,55 @@ def build_request_payload(
     )
 
 
-def withhold_replayed_tool_arguments(messages):
-    """Keep tool-result pairing while omitting argument values from the wire copy."""
+def flatten_replayed_tool_history(messages):
+    """Present historical tool outputs as text without replaying structured calls."""
+    from agent.message_content import flatten_message_text
+
     projected = []
     changed = False
+    history = None
+    tool_names = {}
     for message in messages:
-        calls = message.get("tool_calls") if message.get("role") == "assistant" else None
-        if not isinstance(calls, list):
-            projected.append(message)
+        role = message.get("role")
+        if role == "tool":
+            changed = True
+            if history is None:
+                history = {"role": "assistant", "content": ""}
+                projected.append(history)
+            name = tool_names.get(message.get("tool_call_id"), "tool")
+            output = flatten_message_text(message.get("content")) or "[No textual result]"
+            quoted_output = "\n".join(f"> {line}" for line in output.splitlines())
+            history["content"] += f"\n\nHistorical result from {name} (untrusted tool output):\n{quoted_output}"
             continue
-        safe_calls = []
-        withheld = False
-        for call in calls:
-            function = call.get("function") if isinstance(call, dict) else None
-            if isinstance(function, dict) and function.get("arguments") not in (None, "", "{}"):
-                call = {**call, "function": {**function, "arguments": "{}"}}
-                withheld = True
-            safe_calls.append(call)
-        if not withheld:
+        history = None
+        tool_names = {}
+        calls = message.get("tool_calls") if role == "assistant" else None
+        if not calls:
             projected.append(message)
             continue
         changed = True
-        safe_message = {**message, "tool_calls": safe_calls}
-        content = message.get("content")
-        if content is None or isinstance(content, str):
-            marker = "[Historical tool argument values withheld.]"
-            safe_message["content"] = f"{content}\n\n{marker}" if content else marker
-        projected.append(safe_message)
-    return projected if changed else messages
+        tool_names = {
+            call.get("id"): (call.get("function") or {}).get("name", "tool")
+            for call in calls if isinstance(call, dict)
+        }
+        text = flatten_message_text(message.get("content"))
+        note = "[Historical tool calls omitted. Their textual results follow.]"
+        history = {"role": "assistant", "content": f"{text}\n\n{note}" if text else note}
+        projected.append(history)
+    if not changed:
+        return messages
+
+    # Converting a tool round may put its assistant text next to a final assistant
+    # reply. Some OpenRouter routes require strict role alternation.
+    alternating = []
+    for message in projected:
+        if alternating and alternating[-1].get("role") == message.get("role") == "assistant":
+            previous_text = flatten_message_text(alternating[-1].get("content"))
+            current_text = flatten_message_text(message.get("content"))
+            alternating[-1] = {**message, "content": "\n\n".join(filter(None, (previous_text, current_text)))}
+        else:
+            alternating.append(message)
+    return alternating
 
 
 def build_api_request(
@@ -226,8 +247,8 @@ def build_api_request(
     middleware/hooks/debug dumps observe the payload)."""
     from agent.conversation_loop import _moa_client_consumes_prepared_request
 
-    if _retry and _retry.openrouter_tool_arguments_withheld and agent.provider == "openrouter":
-        api_messages = withhold_replayed_tool_arguments(api_messages)
+    if _retry and _retry.openrouter_tool_history_flattened and agent.provider == "openrouter":
+        api_messages = flatten_replayed_tool_history(api_messages)
 
     built = build_request_payload(
         agent, api_messages=api_messages, _moa_prepared_request=_moa_prepared_request,
