@@ -30,7 +30,7 @@ from agent.message_sanitization import (
 from agent.thinking_timeout_guidance import build_thinking_timeout_guidance, is_thinking_timeout
 from agent.vision_message_prep import _provider_model_key
 from agent.turn_failure_copy import (
-    CONTENT_POLICY_NEXT_STEPS, content_policy_copy, exhausted_copy, limit_reset_copy, nonretryable_copy,
+    CONTENT_POLICY_NEXT_STEPS, SENSITIVE_INFO_GUARDRAIL_NEXT_STEPS, content_policy_copy, exhausted_copy, limit_reset_copy, nonretryable_copy,
     provider_label_for, site_copy, stamp_failure,
 )
 from agent.turn_retry_state import TurnRetryState
@@ -1099,7 +1099,10 @@ def nonretryable_client_error_result(
         )
     # Content-policy blocks: the provider refused this prompt, so recovery is a rephrase
     # or another model, not key/retry advice.
-    if classified.reason == FailoverReason.content_policy_blocked:
+    sensitive_info_guardrail = (getattr(classified, "error_context", None) or {}).get("sensitive_info_guardrail", False)
+    if sensitive_info_guardrail:
+        _vlines(agent, f"   💡 {SENSITIVE_INFO_GUARDRAIL_NEXT_STEPS}")
+    elif classified.reason == FailoverReason.content_policy_blocked:
         _vlines(
             agent,
             f"   💡 {CONTENT_POLICY_NEXT_STEPS}",
@@ -1130,7 +1133,9 @@ def nonretryable_client_error_result(
     if classified.reason == FailoverReason.content_policy_blocked:
         return _content_policy_blocked_result(
             messages, api_call_count,
-            final_response="⚠️ " + content_policy_copy(label=_plabel, summary=_nonretryable_summary),
+            final_response="⚠️ " + content_policy_copy(
+                label=_plabel, summary=_nonretryable_summary, sensitive_info_guardrail=sensitive_info_guardrail,
+            ),
             error_detail=_nonretryable_summary,
         )
     # Billing walls get the same structured recovery descriptor as the max-retries path

@@ -26,3 +26,14 @@ def test_alibaba_guardrail_is_a_content_policy_block_not_an_outage(status, messa
     result = classify_api_error(_APIError(message, status), provider="nous", model="qwen/qwen3.8-flash")
     assert result.reason == FailoverReason.content_policy_blocked
     assert result.retryable is False
+
+
+def test_openrouter_sensitive_info_guardrail_stops_without_fallback():
+    error = _APIError(
+        "Request blocked by content filter: Content filter redaction would produce invalid tool call arguments",
+        403,
+    )
+    result = classify_api_error(error, provider="openrouter")
+    assert result.reason == FailoverReason.content_policy_blocked
+    assert result.retryable is False
+    assert result.should_fallback is False

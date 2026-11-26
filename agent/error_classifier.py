@@ -885,6 +885,11 @@ def _provider_special_cases(c: _Ctx) -> Optional[Verdict]:
     welcome = _nous_welcome_tier(c)
     if welcome is not None:
         return welcome
+    # OpenRouter's request-side Sensitive Info Guardrail uses a distinct 403 envelope.
+    # Keep the rejected payload on this route rather than replaying it to another provider.
+    if status == 403 and c.provider_slug == "openrouter" and "request blocked by content filter:" in msg:
+        return _v(_R.content_policy_blocked, retryable=False, should_fallback=False,
+                  error_context={"sensitive_info_guardrail": True})
     # Safety refusal before status classification so a 400 block isn't downgraded
     # to format_error and a status-less block isn't left retryable (#18028).
     if any(p in msg for p in _CONTENT_POLICY_BLOCKED_PATTERNS):
