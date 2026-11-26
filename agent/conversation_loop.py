@@ -1759,7 +1759,9 @@ def _run_conversation_turn(
         _run_phase(announce_api_call, agent, s)
 
         s.api_start_time, s.retry_count, s.max_retries = time.time(), 0, agent._api_max_retries
-        s._retry, s.finish_reason, s.response, s.api_kwargs = TurnRetryState(), "stop", None, None
+        _arguments_withheld = bool(s._retry and s._retry.openrouter_tool_arguments_withheld)
+        s._retry = TurnRetryState(openrouter_tool_arguments_withheld=_arguments_withheld)
+        s.finish_reason, s.response, s.api_kwargs = "stop", None, None
         s.api_request_id = agent._current_api_request_id = f"{s.turn_id}:api:{s.api_call_count}"
 
         early_result = _run_api_retry_loop(agent, s)
