@@ -662,12 +662,12 @@ def recover_after_classification(
     from agent.conversation_loop import _is_nous_inference_route
 
     if (getattr(classified, "error_context", None) or {}).get("guardrail_rejected_tool_arguments"):
-        from agent.turn_api_request import withhold_replayed_tool_arguments
+        from agent.turn_api_request import flatten_replayed_tool_history
 
-        if (not _retry.openrouter_tool_arguments_withheld
-                and withhold_replayed_tool_arguments(api_messages) is not api_messages):
-            _retry.openrouter_tool_arguments_withheld = True
-            logger.info("Retrying OpenRouter request with historical tool arguments withheld")
+        if (not _retry.openrouter_tool_history_flattened
+                and flatten_replayed_tool_history(api_messages) is not api_messages):
+            _retry.openrouter_tool_history_flattened = True
+            logger.info("Retrying OpenRouter request with historical tool results rendered as text")
             return True, False
 
     # The credit-limited 402 clamp runs before pool rotation, which would bench a credential

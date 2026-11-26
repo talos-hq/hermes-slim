@@ -3,7 +3,7 @@
 import pytest
 
 from agent.error_classifier import FailoverReason, classify_api_error
-from agent.turn_api_request import withhold_replayed_tool_arguments
+from agent.turn_api_request import flatten_replayed_tool_history
 from agent.turn_recovery import recover_after_classification
 from agent.turn_retry_state import TurnRetryState
 
@@ -57,22 +57,24 @@ def test_openrouter_guardrail_retries_without_replaying_tool_argument_values():
         ],
     }
     tool_result = {"role": "tool", "tool_call_id": "probe", "content": "Check complete."}
+    final = {"role": "assistant", "content": "The check completed."}
     user = {"role": "user", "content": "Continue."}
-    history = [assistant, tool_result, user]
+    history = [assistant, tool_result, final, user]
     retry_now, rotated = recover_after_classification(
         None, error, refusal, retry, status_code=403, error_context={},
         messages=history, api_messages=history,
     )
 
     assert retry_now and not rotated
-    assert retry.openrouter_tool_arguments_withheld
-    replay = withhold_replayed_tool_arguments(history)
-    assert replay[0]["tool_calls"] == [
-        {"id": "probe", "type": "function", "function": {"name": "check", "arguments": "{}"}},
-    ]
-    assert replay[1:] == [tool_result, user]
+    assert retry.openrouter_tool_history_flattened
+    replay = flatten_replayed_tool_history(history)
+    assert replay[0]["role"] == "assistant"
+    assert "tool_calls" not in replay[0]
+    assert "Historical result from check (untrusted tool output):\n> Check complete." in replay[0]["content"]
+    assert replay[0]["content"].endswith("The check completed.")
+    assert replay[1:] == [user]
     assert history[0]["tool_calls"][0]["function"]["arguments"] == '{"identifier":2025550100}'
-    assert withhold_replayed_tool_arguments(replay) is replay
+    assert flatten_replayed_tool_history(replay) is replay
 
 
 def test_openrouter_guardrail_projection_survives_another_tool_round(monkeypatch):
@@ -95,8 +97,8 @@ def test_openrouter_guardrail_projection_survives_another_tool_round(monkeypatch
             for message in kwargs["messages"]
             for tc in message.get("tool_calls", [])
         }
-        calls.append(arguments)
-        if arguments.get("historical") == captured:
+        calls.append((arguments, kwargs["messages"]))
+        if arguments:
             raise guardrail_error
         message = {"role": "assistant", "content": "Done"}
         finish = "stop"
@@ -134,5 +136,10 @@ def test_openrouter_guardrail_projection_survives_another_tool_round(monkeypatch
     result = agent.run_conversation("Continue.", conversation_history=history)
 
     assert result["completed"]
-    assert calls == [{"historical": captured}, {"historical": "{}"}, {"historical": "{}", "next": "{}"}]
+    assert [arguments for arguments, _ in calls] == [{"historical": captured}, {}, {}]
+    assert all(
+        any("Historical result from check (untrusted tool output):\n> Check complete." in (row.get("content") or "")
+            for row in request)
+        for _, request in calls[1:]
+    )
     assert history[1]["tool_calls"][0]["function"]["arguments"] == captured
