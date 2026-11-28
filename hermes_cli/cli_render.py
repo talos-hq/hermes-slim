@@ -50,7 +50,7 @@ def _strip_reasoning_tags(text: str) -> str:
     openclaw/openclaw#67318.
     """
     from cli import _REASONING_TAGS, _TOOL_CALL_TAGS
-    from agent.agent_runtime_helpers import normalize_dsml_tags
+    from agent.agent_runtime_helpers_strip import normalize_dsml_tags
     cleaned = normalize_dsml_tags(text)
     for tag in _REASONING_TAGS:
         cleaned = re.sub(rf"<{tag}>.*?</{tag}>\s*", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
@@ -67,7 +67,7 @@ def _strip_reasoning_tags(text: str) -> str:
         '', cleaned, flags=re.DOTALL | re.IGNORECASE,
     )
     # Stray closers and cut tool-call fragments share storage's compiled patterns (#101899, #102303).
-    from agent.agent_runtime_helpers import (
+    from agent.agent_runtime_helpers_strip import (
         _HISTORICAL_HISTORY_NOTE_PATTERN, _HISTORICAL_STRAY_LINE_PATTERN,
         _HISTORICAL_TOOL_RESULT_PATTERN, _STRAY_TOOL_CALL_CLOSER_PATTERN,
         _UNTERMINATED_TOOL_CALL_PATTERN,

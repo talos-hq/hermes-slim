@@ -158,3 +158,29 @@ class TestDsmlAndHistoryLeaks:
     def test_prose_mentioning_dsml_survives(self, stripper):
         text = "The DSML format is DeepSeek's text-channel tool syntax."
         assert stripper(text) == text
+
+
+# Paraphrased imitations observed in real forgeci replies after the exact-shape strip (#181).
+@pytest.mark.parametrize("leak", [
+    "Verifying it myself.\n\n[Historical tool call output rendered compactly.] The commit is real.",
+    "Done. [Historical tool output rendered in a compact form.] The PR is green.",
+    "Next.\n[Historical calls omitted. Their textual results follow.]\nThe PR is green.",
+    "Next. [Historical …] The PR is green.",
+    "Next. [Historical omitted noise irrelevant.] The PR is green.",
+    "Next.\n(Context from Hermes, not written by the assistant: results of tools.)\nThe PR is green.",
+])
+@pytest.mark.parametrize("stripper", _STRIPPERS)
+def test_paraphrased_history_notes_stripped(stripper, leak):
+    out = stripper(leak)
+    assert "Historical" not in out and "Context from Hermes" not in out
+    assert out.rstrip().endswith(("The commit is real.", "The PR is green."))
+
+
+@pytest.mark.parametrize("stripper", _STRIPPERS)
+@pytest.mark.parametrize("prose", [
+    "Historical data shows the cache hit rate doubled.",
+    "The [history] section lists every release.",
+    "See historical results in the dashboard (they follow the trend).",
+])
+def test_history_prose_survives(stripper, prose):
+    assert stripper(prose) == prose
