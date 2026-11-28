@@ -84,6 +84,10 @@ in the same order.
 - **One question per request.** "What is X and is it safe?" retrieves badly; ask twice.
 - **403 `terms_not_accepted`** means the operator has not accepted BrightKB's terms on that
   installation. There is no workaround from the client side.
+- **It never says "I don't know".** An off-topic question still returns `found: true` with facts
+  matched on a single word: "Who won the 2026 World Cup?" comes back with facts about ketchup
+  cups and Pimm's. `matched_topic` is not a relevance signal — judge the facts yourself and say
+  BrightKB has nothing rather than passing the noise through.
 - **Facts are fixed at build time.** The published modules were built 2026-11-22; treat anything
   newer as out of scope.
 - **Licence limits reuse.** BrightKB's content carries non-commercial terms (PolyForm
@@ -95,5 +99,5 @@ in the same order.
 
 - `curl -s "$BRIGHTKB_URL/models"` returns `ika-knowledge-base`.
 - A known-good question returns non-empty `facts` with a `sources` entry per fact.
-- A deliberately out-of-scope question (e.g. "Who won the 2026 World Cup?") returns nothing —
-  that is the expected shape of a miss, not an error.
+- An off-topic question (e.g. "Who won the 2026 World Cup?") answers 200 with loosely matched
+  facts rather than an error or an empty result — recognise it as a miss and say so.
