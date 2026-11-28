@@ -34,6 +34,10 @@ jobs:
       - run: python3 -m unittest discover -s slim/tests -v
       - name: Set up soldr
         uses: forge-ci/setup-soldr@271d19234f51ed1a908ee6ecdd721a75dff1dbb6 # v0
+        with:
+          # The crate's toolchain file is not at the repo root; without this the action
+          # provisions bare `stable` (no rustfmt) and exports RUSTUP_TOOLCHAIN=stable.
+          toolchain-file: slim/unpack/rust-toolchain.toml
         env:
           SOLDR_GITHUB_TOKEN: ${{ github.token }}
       - name: hermes-slim-unpack tests

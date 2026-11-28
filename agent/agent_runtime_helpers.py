@@ -39,43 +39,8 @@ from agent.primary_runtime_snapshot import _build_primary_runtime_snapshot
 from utils import base_url_host_matches, base_url_hostname, env_var_enabled
 logger = logging.getLogger(__name__)
 
-_TOOL_CALL_TAG_NAMES = ("tool_call", "tool_calls", "tool_result", "function_call", "function_calls")
-# Optional XML namespace prefix: some models serialize native tool calls as <ns:function_calls>.
-_NS_PREFIX = r"(?:[\w.-]+:)?"
-_REASONING_BLOCK_PATTERNS = tuple(
-    re.compile(rf"<{name}>.*?</{name}>", re.DOTALL | re.IGNORECASE) for name in THINK_TAG_NAMES
-)
-_TOOL_CALL_BLOCK_PATTERNS = tuple(
-    re.compile(rf"<{_NS_PREFIX}{name}\b[^>]*>.*?</{_NS_PREFIX}{name}>", re.DOTALL | re.IGNORECASE)
-    for name in _TOOL_CALL_TAG_NAMES
-)
-
-# Named <function name=...> blocks; boundary- and name-gated (see _THINK_STRIP_PATTERNS note).
-_NAMED_FUNCTION_BLOCK_PATTERN = re.compile(
-    r'(?:(?<=^)|(?<=[\n\r.!?:]))[ \t]*'
-    r'<function\b[^>]*\bname\s*=[^>]*>'
-    r'(?:(?:(?!</function>).)*)</function>', re.DOTALL | re.IGNORECASE,
-)
-_UNTERMINATED_REASONING_BLOCK_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<(?:{"|".join(THINK_TAG_NAMES)})\b[^>]*>.*$', re.DOTALL | re.IGNORECASE
-)
-_ORPHAN_REASONING_TAG_PATTERN = re.compile(
-    rf'</?(?:{"|".join(THINK_TAG_NAMES)})>\s*', re.IGNORECASE
-)
-_STRAY_TOOL_CALL_CLOSER_PATTERN = re.compile(
-    rf'</(?:{_NS_PREFIX}(?:{"|".join(_TOOL_CALL_TAG_NAMES)}|function))>\s*', re.IGNORECASE
-)
-
-# An unclosed tool call is unrecoverable (#101899), so drop its remaining block.
-# Stray argument tags only identify fragment lines, not the rest of the text
-# (#102303). Require a line-start tag (optionally glued to a bare tool name,
-# process_manage<arg_key>) or a line-ending closer (wait</arg_value>) so inline
-# prose mentions and subsequent prose survive.
-_UNTERMINATED_TOOL_CALL_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<{_NS_PREFIX}(?:{"|".join(_TOOL_CALL_TAG_NAMES)})\b[^>]*>.*$'
-    r'|(?:^|\n)[ \t]*[\w.:-]*</?arg_(?:key|value)\b[^\n]*'
-    r'|(?:^|\n)[^\n<]*</arg_(?:key|value)>[ \t\r]*(?=\n|$)',
-    re.DOTALL | re.IGNORECASE,
+from agent.agent_runtime_helpers_strip import (  # re-exported for callers
+    _REASONING_BLOCK_PATTERNS, _THINK_STRIP_PATTERNS, normalize_dsml_tags,
 )
 
 
@@ -832,24 +797,13 @@ def _flatten_content_text(content: Any) -> str:
     return str(content)
 
 
-# Order matters: closed pairs first (case-insensitive so mixed-case tags don't fall through to the
-# unterminated pass and eat trailing content), then tool-call XML blocks, the boundary+name-gated
-# <function> block, the unterminated reasoning block, stray orphan reasoning tags, and finally stray
-# tool-call CLOSERS only (bare/unterminated <function> is kept: a truncated streaming tail may still
-# be valuable, matching OpenClaw's asymmetry).
-_THINK_STRIP_PATTERNS = (
-    *_REASONING_BLOCK_PATTERNS, *_TOOL_CALL_BLOCK_PATTERNS, _NAMED_FUNCTION_BLOCK_PATTERN,
-    _UNTERMINATED_REASONING_BLOCK_PATTERN, _ORPHAN_REASONING_TAG_PATTERN,
-    _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN,
-)
-
-
 def strip_think_blocks(agent, content: str) -> str:
     """Remove reasoning/thinking blocks from content, returning only visible text: closed tag
     pairs, unterminated open tags at a block boundary (mirrors ``gateway/stream_consumer.py``),
     stray orphan tags (all case-insensitive variants), and standalone tool-call XML blocks some
     open models emit; ``<function>`` is boundary- and ``name=``-gated so prose mentions survive."""
     content = _flatten_content_text(content) if content else ""
+    content = normalize_dsml_tags(content)
     for pattern in _THINK_STRIP_PATTERNS if content else ():
         content = pattern.sub('', content)
     return content

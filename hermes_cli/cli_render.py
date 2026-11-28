@@ -33,7 +33,11 @@ def _cli():
 _REASONING_TAGS = THINK_TAG_NAMES
 
 
-_TOOL_CALL_TAGS = ("tool_call", "tool_calls", "tool_result", "function_call", "function_calls")
+_TOOL_CALL_TAGS = (
+    "tool_call", "tool_calls", "tool_result", "function_call", "function_calls",
+    # Bare invoke/parameter/calls blocks (DeepSeek DSML text-channel calls, see _strip_reasoning_tags).
+    "invoke", "parameter", "calls",
+)
 
 
 def _strip_reasoning_tags(text: str) -> str:
@@ -46,7 +50,8 @@ def _strip_reasoning_tags(text: str) -> str:
     openclaw/openclaw#67318.
     """
     from cli import _REASONING_TAGS, _TOOL_CALL_TAGS
-    cleaned = text
+    from agent.agent_runtime_helpers_strip import normalize_dsml_tags
+    cleaned = normalize_dsml_tags(text)
     for tag in _REASONING_TAGS:
         cleaned = re.sub(rf"<{tag}>.*?</{tag}>\s*", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
         cleaned = re.sub(rf"<{tag}>.*$", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
@@ -62,9 +67,17 @@ def _strip_reasoning_tags(text: str) -> str:
         '', cleaned, flags=re.DOTALL | re.IGNORECASE,
     )
     # Stray closers and cut tool-call fragments share storage's compiled patterns (#101899, #102303).
-    from agent.agent_runtime_helpers import _STRAY_TOOL_CALL_CLOSER_PATTERN, _UNTERMINATED_TOOL_CALL_PATTERN
+    from agent.agent_runtime_helpers_strip import (
+        _HISTORICAL_HISTORY_NOTE_PATTERN, _HISTORICAL_STRAY_LINE_PATTERN,
+        _HISTORICAL_TOOL_RESULT_PATTERN, _STRAY_TOOL_CALL_CLOSER_PATTERN,
+        _UNTERMINATED_TOOL_CALL_PATTERN,
+    )
     cleaned = _STRAY_TOOL_CALL_CLOSER_PATTERN.sub('', cleaned)
     cleaned = _UNTERMINATED_TOOL_CALL_PATTERN.sub('', cleaned)
+    # Leaked synthetic tool-history projection the model imitates (see strip_think_blocks).
+    cleaned = _HISTORICAL_HISTORY_NOTE_PATTERN.sub('', cleaned)
+    cleaned = _HISTORICAL_TOOL_RESULT_PATTERN.sub('', cleaned)
+    cleaned = _HISTORICAL_STRAY_LINE_PATTERN.sub('', cleaned)
     return cleaned.strip()
 
 
